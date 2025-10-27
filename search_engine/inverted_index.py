@@ -56,7 +56,7 @@ class InvertedIndex:
         elif len(doc_list) == 1:
             matched = list(doc_list[0])
         else:
-            matched = list(doc_list[0].intersection(doc_list[1:]))
+            matched = list(doc_list[0].intersection(*doc_list[1:]))
 
         results = [
             SearchResult(
