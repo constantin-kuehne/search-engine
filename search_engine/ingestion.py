@@ -21,7 +21,7 @@ def process_data(
             file, delimiter="\t", fieldnames=["docid", "url", "title", "body"]
         )
         for i, row in enumerate(reader):
-            if i % 100 == 0:
+            if i % 1_000 == 0:
                 print(f"Processed {i} rows")
 
             if max_rows is not None and i >= max_rows:
