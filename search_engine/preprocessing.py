@@ -1,7 +1,6 @@
 import spacy
 
-
-nlp = spacy.load("en_core_web_sm", disable=["parser", "ner", "lemmatizer"])
+nlp = spacy.blank("en")
 
 
 def tokenize_text(text: str) -> list[str]:
