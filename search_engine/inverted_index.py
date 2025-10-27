@@ -50,6 +50,10 @@ class InvertedIndex:
             if res is not None:
                 doc_freq, position_dict = res
                 doc_list.append(set(position_dict.keys()))
+            else:
+                # add the empty set if term not found, so we give no results
+                # the correct AND semantic
+                doc_list.append(set()) 
 
         if len(doc_list) == 0:
             matched = []
