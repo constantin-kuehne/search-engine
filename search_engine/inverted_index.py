@@ -53,13 +53,10 @@ class InvertedIndex:
             pos_lists.append(self.index[token][1][doc_id])
 
         indices = [0 for _ in range(len(pos_lists))]
-        print(indices)
         has_phrase: bool = False
 
         for _ in range(len(pos_lists[0])):
             for i, pos_list in enumerate(pos_lists[1:]):
-                print(indices[i + 1])
-                print(f"{len(pos_list)=}")
                 while (
                     pos_list[indices[i + 1]] < pos_lists[i][indices[i]]
                 ):  # +1 because we skip first list
@@ -115,7 +112,6 @@ class InvertedIndex:
                 matched = list(set(self.docs.keys()).difference(*doc_list))
         elif mode == SearchMode.PHRASE:
             if len(doc_list) == 1:
-                print(doc_list)
                 matched = list(doc_list[0])
             elif len(doc_list) > 1:
                 match_candidates = doc_list[0].intersection(*doc_list[1:])
