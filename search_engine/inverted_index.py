@@ -21,6 +21,7 @@ class SearchMode(Enum):
     OR = "OR"
     NOT = "NOT"
     PHRASE = "PHRASE"
+    QUERY_EVALUATOR = "QUERY_EVALUATOR"
 
 
 class InvertedIndex:
@@ -78,6 +79,48 @@ class InvertedIndex:
 
         return has_phrase
 
+    def and_statement(self, doc_list: list[set[int]]) -> list[int]:
+        matched = []
+        if len(doc_list) == 1:
+            matched = list(doc_list[0])
+        elif len(doc_list) > 1:
+            matched = list(doc_list[0].intersection(*doc_list[1:]))
+
+        return matched
+
+    def or_statement(self, doc_list: list[set[int]]) -> list[int]:
+        matched = []
+        if len(doc_list) == 1:
+            matched = list(doc_list[0])
+        elif len(doc_list) > 1:
+            matched = list(doc_list[0].union(*doc_list[1:]))
+
+        return matched
+
+    def not_statement(self, doc_list: list[set[int]]) -> list[int]:
+        matched = []
+        if len(doc_list) == 0:
+            matched = list(self.docs.keys())
+        else:
+            matched = list(set(self.docs.keys()).difference(*doc_list))
+
+        return matched
+
+    def phrase_statement(
+        self, doc_list: list[set[int]], tokens: list[str]
+    ) -> list[int]:
+        matched = []
+        if len(doc_list) == 1:
+            matched = list(doc_list[0])
+        elif len(doc_list) > 1:
+            match_candidates = doc_list[0].intersection(*doc_list[1:])
+            matched = []
+            for doc_id in match_candidates:
+                if self.has_phrase(doc_id, tokens):
+                    matched.append(doc_id)
+
+        return matched
+
     def search(
         self, query: str, mode: SearchMode, num_return: int = 10
     ) -> tuple[int, list[SearchResult]]:
@@ -94,31 +137,16 @@ class InvertedIndex:
                 # the correct AND semantic
                 doc_list.append(set())
 
+        print(tokens)
         matched = []
         if mode == SearchMode.AND:
-            if len(doc_list) == 1:
-                matched = list(doc_list[0])
-            elif len(doc_list) > 1:
-                matched = list(doc_list[0].intersection(*doc_list[1:]))
+            matched = self.and_statement(doc_list)
         elif mode == SearchMode.OR:
-            if len(doc_list) == 1:
-                matched = list(doc_list[0])
-            elif len(doc_list) > 1:
-                matched = list(doc_list[0].union(*doc_list[1:]))
+            matched = self.or_statement(doc_list)
         elif mode == SearchMode.NOT:
-            if len(doc_list) == 0:
-                matched = list(self.docs.keys())
-            else:
-                matched = list(set(self.docs.keys()).difference(*doc_list))
+            matched = self.not_statement(doc_list)
         elif mode == SearchMode.PHRASE:
-            if len(doc_list) == 1:
-                matched = list(doc_list[0])
-            elif len(doc_list) > 1:
-                match_candidates = doc_list[0].intersection(*doc_list[1:])
-                matched = []
-                for doc_id in match_candidates:
-                    if self.has_phrase(doc_id, tokens):
-                        matched.append(doc_id)
+            matched = self.phrase_statement(doc_list, tokens)
 
         results = [
             SearchResult(
