@@ -1,7 +1,7 @@
 from typing import NamedTuple
 
 from search_engine.preprocessing import (build_query_tree, tokenize_text,
-                                         yard_shunting)
+                                         shunting_yard)
 from search_engine.utils import SearchMode
 
 POSITIONS = dict[int, list[int]]
@@ -145,7 +145,7 @@ class InvertedIndex:
     def query_evaluator(self, tokens: list[str]) -> list[int]:
         matched: list[int] = []
 
-        output_queue = yard_shunting(tokens)
+        output_queue = shunting_yard(tokens)
         root = build_query_tree(output_queue)
         matched = list(self.evaluate_subtree(root))
 

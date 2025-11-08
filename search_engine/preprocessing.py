@@ -41,7 +41,7 @@ def tokenize_text(text: str) -> list[str]:
     return tokens
 
 
-def yard_shunting(tokens: list[str]):
+def shunting_yard(tokens: list[str]):
     # algo taken from https://en.wikipedia.org/wiki/Shunting_yard_algorithm
     operator_stack: list[str] = []
     output_queue: list[str | list[str]] = []
@@ -153,7 +153,7 @@ if __name__ == "__main__":
 
     print_tree(
         build_query_tree(
-            yard_shunting(
+            shunting_yard(
                 ['"', "test", "this", '"', "AND", "(", "test2", "OR", "test3", ")"]
             )
         )
@@ -161,32 +161,30 @@ if __name__ == "__main__":
     print("------------")
     print_tree(
         build_query_tree(
-            yard_shunting(['"', "test", "this", '"', "AND", "test2", "OR", "test3"])
+            shunting_yard(['"', "test", "this", '"', "AND", "test2", "OR", "test3"])
         )
     )
     print("------------")
     print_tree(
-        build_query_tree(yard_shunting(["test", "this", "AND", "test2", "OR", "test3"]))
-    )
-    print("------------")
-    print_tree(
-        build_query_tree(
-            yard_shunting(["test", "this", "AND", "test2", "OR", "NOT", "test3"])
-        )
-    )
-    print("------------")
-    print_tree(build_query_tree(yard_shunting(["test", "and", "test"])))
-    print("------------")
-    print_tree(build_query_tree(yard_shunting(['"', "test", "and", "test", '"'])))
-    print("------------")
-    print_tree(
-        build_query_tree(
-            yard_shunting(tokenize_text('"burj khalifa" AND test OR tower'))
-        )
+        build_query_tree(shunting_yard(["test", "this", "AND", "test2", "OR", "test3"]))
     )
     print("------------")
     print_tree(
         build_query_tree(
-            yard_shunting(tokenize_text(')burj test AND test OR tower'))
+            shunting_yard(["test", "this", "AND", "test2", "OR", "NOT", "test3"])
         )
+    )
+    print("------------")
+    print_tree(build_query_tree(shunting_yard(["test", "and", "test"])))
+    print("------------")
+    print_tree(build_query_tree(shunting_yard(['"', "test", "and", "test", '"'])))
+    print("------------")
+    print_tree(
+        build_query_tree(
+            shunting_yard(tokenize_text('"burj khalifa" AND test OR tower'))
+        )
+    )
+    print("------------")
+    print_tree(
+        build_query_tree(shunting_yard(tokenize_text(")burj test AND test OR tower")))
     )
