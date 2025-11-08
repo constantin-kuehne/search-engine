@@ -1,7 +1,7 @@
-import time
-import search_engine
 import argparse
+import time
 
+import search_engine
 from search_engine.inverted_index import SearchMode
 
 if __name__ == "__main__":
@@ -18,18 +18,22 @@ if __name__ == "__main__":
         "--num_return",
         type=int,
         default=10,
-        help="How many search results should be returned"
+        help="How many search results should be returned",
     )
     args = parser.parse_args()
 
-    print("Starting indexing...")
     index = search_engine.InvertedIndex()
+
+    print("Starting indexing...")
+    start = time.time()
+
     for row in search_engine.ingestion.process_data(
-        "./msmarco-docs.tsv", max_rows=1_000
+        "./msmarco-docs.tsv", max_rows=100
     ):
         index.add_document(int(row.docid[1:]), row.url, row.title, row.tokens)
 
-    print("Indexing complete.\n")
+    end = time.time()
+    print(f"Indexing complete. Took {end - start:.4f}s\n")
 
     try:
         while True:

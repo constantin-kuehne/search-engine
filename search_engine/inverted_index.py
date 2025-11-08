@@ -1,6 +1,8 @@
-from search_engine.preprocessing import tokenize_text
 from typing import NamedTuple
-from enum import Enum
+
+from search_engine.preprocessing import (build_query_tree, tokenize_text,
+                                         yard_shunting)
+from search_engine.utils import SearchMode
 
 POSITIONS = dict[int, list[int]]
 
@@ -14,14 +16,6 @@ class SearchResult(NamedTuple):
     doc_id: int
     url: str
     title: str
-
-
-class SearchMode(Enum):
-    AND = "AND"
-    OR = "OR"
-    NOT = "NOT"
-    PHRASE = "PHRASE"
-    QUERY_EVALUATOR = "QUERY_EVALUATOR"
 
 
 class InvertedIndex:
@@ -121,23 +115,62 @@ class InvertedIndex:
 
         return matched
 
+    def evaluate_subtree(self, node) -> set[int]:
+        if isinstance(node.value, SearchMode):
+            if node.value == SearchMode.AND:
+                left_result = self.evaluate_subtree(node.left)
+                right_result = self.evaluate_subtree(node.right)
+                return set(self.and_statement([left_result, right_result]))
+            elif node.value == SearchMode.OR:
+                left_result = self.evaluate_subtree(node.left)
+                right_result = self.evaluate_subtree(node.right)
+                return set(self.or_statement([left_result, right_result]))
+            elif node.value == SearchMode.NOT:
+                left_result = self.evaluate_subtree(node.left)
+                return set(self.not_statement([left_result]))
+
+        if isinstance(node.value, list):
+            # phrase search
+            tokens = node.value
+            doc_list: list[set[int]] = []
+            for token in tokens:
+                doc_list.append(self.get_docs(token))
+            return set(self.phrase_statement(doc_list, tokens))
+
+        if isinstance(node.value, str):
+            return self.get_docs(node.value)
+
+        return set()
+
+    def query_evaluator(self, tokens: list[str]) -> list[int]:
+        matched: list[int] = []
+
+        output_queue = yard_shunting(tokens)
+        root = build_query_tree(output_queue)
+        matched = list(self.evaluate_subtree(root))
+
+        return matched
+
+    def get_docs(self, token: str) -> set[int]:
+        res = self.index.get(token, None)
+        if res is not None:
+            doc_freq, position_dict = res
+            return set(position_dict.keys())
+        else:
+            # add the empty set if term not found, so we give no results
+            # the correct AND semantic
+            return set()
+
     def search(
         self, query: str, mode: SearchMode, num_return: int = 10
     ) -> tuple[int, list[SearchResult]]:
         tokens = tokenize_text(query)
 
-        doc_list: list[set[int]] = []
-        for token in tokens:
-            res = self.index.get(token, None)
-            if res is not None:
-                doc_freq, position_dict = res
-                doc_list.append(set(position_dict.keys()))
-            else:
-                # add the empty set if term not found, so we give no results
-                # the correct AND semantic
-                doc_list.append(set())
+        if mode != SearchMode.QUERY_EVALUATOR:
+            doc_list: list[set[int]] = []
+            for token in tokens:
+                doc_list.append(self.get_docs(token))
 
-        print(tokens)
         matched = []
         if mode == SearchMode.AND:
             matched = self.and_statement(doc_list)
@@ -147,6 +180,9 @@ class InvertedIndex:
             matched = self.not_statement(doc_list)
         elif mode == SearchMode.PHRASE:
             matched = self.phrase_statement(doc_list, tokens)
+        elif mode == SearchMode.QUERY_EVALUATOR:
+            print(tokens)
+            matched = self.query_evaluator(tokens)
 
         results = [
             SearchResult(
