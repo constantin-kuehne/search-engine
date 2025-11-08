@@ -100,10 +100,11 @@ def yard_shunting(tokens: list[str]):
             operator_stack.append(token)
         elif token == ")":
             while operator_stack and operator_stack[-1] != "(":
-                if len(operator_stack) == 0:
-                    print("Malformed query: no ( but a )")
-                    break  # TODO: Malformed query
                 output_queue.append(operator_stack.pop())
+
+            if len(operator_stack) == 0:
+                raise ValueError("Malformed query. Mismatched parentheses")
+
             assert operator_stack[-1] == "("
             operator_stack.pop()
         else:
@@ -181,5 +182,11 @@ if __name__ == "__main__":
     print_tree(
         build_query_tree(
             yard_shunting(tokenize_text('"burj khalifa" AND test OR tower'))
+        )
+    )
+    print("------------")
+    print_tree(
+        build_query_tree(
+            yard_shunting(tokenize_text(')burj test AND test OR tower'))
         )
     )
