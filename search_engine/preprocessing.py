@@ -37,6 +37,7 @@ class QueryNode:
 
 
 def tokenize_text(text: str) -> list[str]:
+    # INFO: simplemma or woosh for tokenizers
     tokens = [token.text for token in nlp(text.lower())]
     return tokens
 

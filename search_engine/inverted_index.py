@@ -22,7 +22,11 @@ class InvertedIndex:
     def __init__(self) -> None:
         self.index: dict[
             str, tuple[int, POSITIONS]
-        ] = {}  # term -> (document frequency, {doc_id: [positions]})
+        ] = {}  # term -> (document frequency, {doc_id: [positions]}) 
+        # TODO: use list instead of dict for document ids
+
+        # simplemma + woosh
+
         self.docs: dict[int, DocumentInfo] = {}
 
     def add_document(
@@ -53,7 +57,7 @@ class InvertedIndex:
         for _ in range(len(pos_lists[0])):
             for i, pos_list in enumerate(pos_lists[1:]):
                 while (
-                    pos_list[indices[i + 1]] < pos_lists[i][indices[i]]
+                    pos_list[indices[i + 1]] <= pos_lists[i][indices[i]]
                 ):  # +1 because we skip first list
                     indices[i + 1] += 1
 
