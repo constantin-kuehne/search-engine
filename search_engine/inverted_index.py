@@ -1,10 +1,10 @@
 from typing import NamedTuple
 
-from search_engine.preprocessing import (build_query_tree, tokenize_text,
-                                         shunting_yard)
+from search_engine.preprocessing import (build_query_tree, shunting_yard,
+                                         tokenize_text)
 from search_engine.utils import SearchMode
 
-POSITIONS = dict[int, list[int]]
+POSTING = tuple[list[int], list[list[int]]]
 
 
 class DocumentInfo(NamedTuple):
@@ -21,8 +21,8 @@ class SearchResult(NamedTuple):
 class InvertedIndex:
     def __init__(self) -> None:
         self.index: dict[
-            str, tuple[int, POSITIONS]
-        ] = {}  # term -> (document frequency, {doc_id: [positions]}) 
+            str, POSTING
+        ] = {}  # term -> (document list, [postion list])
         # TODO: use list instead of dict for document ids
 
         # simplemma + woosh
@@ -35,21 +35,20 @@ class InvertedIndex:
         self.docs[doc_id] = DocumentInfo(url=url, title=title)
         for position, term in enumerate(tokens):
             if term not in self.index:
-                self.index[term] = (1, {doc_id: [position]})
+                self.index[term] = ([doc_id], [[position]])
             else:
-                doc_freq, position_list = self.index[term]
-                if doc_id not in position_list.keys():
-                    doc_freq += 1
-                    position_list[doc_id] = [position]
+                doc_list, position_list_list = self.index[term]
+                if doc_list[-1] != doc_id:
+                    doc_list.append(doc_id)
+                    position_list_list.append([position])
                 else:
-                    position_list[doc_id].append(position)
-
-                self.index[term] = (doc_freq, position_list)
+                    position_list_list[-1].append(position)
 
     def has_phrase(self, doc_id: int, tokens: list[str]) -> bool:
         pos_lists = []
         for token in tokens:
-            pos_lists.append(self.index[token][1][doc_id])
+            idx = self.index[token][0].index(doc_id)
+            pos_lists.append(self.index[token][1][idx])
 
         indices = [0 for _ in range(len(pos_lists))]
         has_phrase: bool = False
@@ -158,8 +157,8 @@ class InvertedIndex:
     def get_docs(self, token: str) -> set[int]:
         res = self.index.get(token, None)
         if res is not None:
-            doc_freq, position_dict = res
-            return set(position_dict.keys())
+            doc_list, position_list_list = res
+            return set(doc_list)
         else:
             # add the empty set if term not found, so we give no results
             # the correct AND semantic
