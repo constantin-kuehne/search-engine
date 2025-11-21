@@ -8,6 +8,7 @@ csv.field_size_limit(sys.maxsize)
 
 class PROCESSED_ROW(NamedTuple):
     docid: int
+    original_docid: str
     url: str
     title: str
     tokens: list[str]
@@ -29,7 +30,7 @@ def process_data(
 
             tokens = tokenize_text(row["body"])
             # doc_id = int(row["docid"][1:])
-            yield PROCESSED_ROW(i, row["url"], row["title"], tokens)
+            yield PROCESSED_ROW(i, row["docid"], row["url"], row["title"], tokens)
 
 
 if __name__ == "__main__":

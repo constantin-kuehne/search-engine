@@ -30,7 +30,7 @@ if __name__ == "__main__":
     for row in search_engine.ingestion.process_data(
         "./msmarco-docs.tsv", max_rows=15_000
     ):
-        index.add_document(row.docid, row.url, row.title, row.tokens)
+        index.add_document(row.docid, row.original_docid, row.url, row.title, row.tokens)
 
     end = time.time()
     print(f"Indexing complete. Took {end - start:.4f}s\n")
@@ -47,7 +47,7 @@ if __name__ == "__main__":
             print(f"We found {num_results} results matching your query.")
             print(f"{args.num_return} of them are:")
             for result in results:
-                print(f"DocId: {result.doc_id} ({result.url}) - {result.title}")
+                print(f"DocId: {result.original_docid} ({result.url}) - {result.title}")
 
             end = time.time()
             print(f"\nSearch took {end - start:.4f} seconds.")

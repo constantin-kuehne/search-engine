@@ -9,12 +9,14 @@ POSTING = tuple[list[int], list[list[int]]]
 
 
 class DocumentInfo(NamedTuple):
+    original_docid: str
     url: str
     title: str
 
 
 class SearchResult(NamedTuple):
     doc_id: int
+    original_docid: str
     url: str
     title: str
 
@@ -29,9 +31,11 @@ class InvertedIndex:
         self.docs: dict[int, DocumentInfo] = {}
 
     def add_document(
-        self, doc_id: int, url: str, title: str, tokens: list[str]
+        self, doc_id: int, original_docid: str, url: str, title: str, tokens: list[str]
     ) -> None:
-        self.docs[doc_id] = DocumentInfo(url=url, title=title)
+        self.docs[doc_id] = DocumentInfo(
+            original_docid=original_docid, url=url, title=title
+        )
         for position, term in enumerate(tokens):
             if term not in self.index:
                 self.index[term] = ([doc_id], [[position]])
@@ -188,7 +192,10 @@ class InvertedIndex:
 
         results = [
             SearchResult(
-                doc_id=doc_id, url=self.docs[doc_id].url, title=self.docs[doc_id].title
+                doc_id=doc_id,
+                original_docid=self.docs[doc_id].original_docid,
+                url=self.docs[doc_id].url,
+                title=self.docs[doc_id].title,
             )
             for doc_id in matched
         ]
