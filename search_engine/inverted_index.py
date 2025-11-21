@@ -1,3 +1,4 @@
+import bisect
 from typing import NamedTuple
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
@@ -20,9 +21,7 @@ class SearchResult(NamedTuple):
 
 class InvertedIndex:
     def __init__(self) -> None:
-        self.index: dict[
-            str, POSTING
-        ] = {}  # term -> (document list, [postion list])
+        self.index: dict[str, POSTING] = {}  # term -> (document list, [postion list])
         # TODO: use list instead of dict for document ids
 
         # simplemma + woosh
@@ -47,7 +46,7 @@ class InvertedIndex:
     def has_phrase(self, doc_id: int, tokens: list[str]) -> bool:
         pos_lists = []
         for token in tokens:
-            idx = self.index[token][0].index(doc_id)
+            idx = bisect.bisect_left(self.index[token][0], doc_id)
             pos_lists.append(self.index[token][1][idx])
 
         indices = [0 for _ in range(len(pos_lists))]

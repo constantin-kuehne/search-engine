@@ -28,9 +28,9 @@ if __name__ == "__main__":
     start = time.time()
 
     for row in search_engine.ingestion.process_data(
-        "./msmarco-docs.tsv", max_rows=100
+        "./msmarco-docs.tsv", max_rows=15_000
     ):
-        index.add_document(int(row.docid[1:]), row.url, row.title, row.tokens)
+        index.add_document(row.docid, row.url, row.title, row.tokens)
 
     end = time.time()
     print(f"Indexing complete. Took {end - start:.4f}s\n")
