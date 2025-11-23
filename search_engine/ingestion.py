@@ -1,6 +1,9 @@
 import csv
 import sys
+import time
 from typing import Generator, NamedTuple
+
+import search_engine
 from search_engine.preprocessing import tokenize_text
 
 csv.field_size_limit(sys.maxsize)
@@ -34,4 +37,28 @@ def process_data(
 
 
 if __name__ == "__main__":
-    process_data("./msmarco-docs.tsv")
+    index = search_engine.InvertedIndex(
+        "./doc_id_file",
+        "./position_list_file",
+        "./position_list_index",
+        "./term_index_file",
+    )
+
+    print("Starting indexing...")
+    start = time.time()
+
+    for row in search_engine.ingestion.process_data(
+        "./msmarco-docs.tsv", max_rows=15_000
+    ):
+        index.add_document(
+            row.docid, row.original_docid, row.url, row.title, row.tokens
+        )
+
+    end = time.time()
+    print(f"Indexing complete. Took {end - start:.4f}s\n")
+    index.save_to_disk(
+        "./doc_id_file",
+        "./position_list_file",
+        "./position_list_index",
+        "./term_index_file",
+    )

@@ -1,5 +1,8 @@
 import bisect
-from typing import NamedTuple
+import mmap
+import pickle
+import struct
+from typing import NamedTuple, Optional
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
@@ -22,13 +25,78 @@ class SearchResult(NamedTuple):
 
 
 class InvertedIndex:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        file_path_doc_id: str,
+        file_path_position_list: str,
+        file_path_position_index: str,
+        file_path_term_index: str,
+    ) -> None:
         self.index: dict[str, POSTING] = {}  # term -> (document list, [postion list])
         # TODO: use list instead of dict for document ids
 
         # simplemma + woosh
 
         self.docs: dict[int, DocumentInfo] = {}
+
+        doc_id_file = open(file_path_doc_id, "rb")
+        term_index_file = open(file_path_term_index, "rb")
+        position_list_file = open(file_path_position_list, mode="rb")
+        position_index_file = open(file_path_position_index, mode="rb")
+
+        self.index_2 = pickle.load(term_index_file)  # TODO: Set to self.index
+
+        self.mm_doc_id_list = mmap.mmap(
+            doc_id_file.fileno(), length=0, prot=mmap.PROT_READ
+        )
+        self.mm_postion_list = mmap.mmap(
+            position_list_file.fileno(), length=0, prot=mmap.PROT_READ
+        )
+        self.mm_postion_index = mmap.mmap(
+            position_index_file.fileno(), length=0, prot=mmap.PROT_READ
+        )
+
+        doc_id_file.close()
+
+    def save_to_disk(
+        self,
+        file_path_doc_id: str,
+        file_path_position_list: str,
+        file_path_position_index: str,
+        file_path_term_index: str,
+    ) -> None:
+        doc_id_file = open(file_path_doc_id, "w+b")
+        term_index_file = open(file_path_term_index, "wb")
+        position_list_file = open(file_path_position_list, mode="wb")
+        position_index_file = open(file_path_position_index, mode="wb")
+
+        term_index: dict[str, tuple[int, int]] = {}
+
+        for term, (doc_list, position_list_list) in self.index.items():
+            term_index[term] = (doc_id_file.tell(), position_index_file.tell())
+            document_index = []
+
+            doc_id_file.write(struct.pack("I", len(doc_list)))
+            doc_id_file.write(struct.pack(f"{len(doc_list)}I", *doc_list))
+
+            for position_list in position_list_list:
+                document_index.append(position_list_file.tell())
+
+                position_list_file.write(struct.pack("I", len(position_list)))
+                position_list_file.write(
+                    struct.pack(f"{len(position_list)}I", *position_list)
+                )
+
+            position_index_file.write(
+                struct.pack(f"{len(document_index)}I", *document_index)
+            )
+
+        pickle.dump(term_index, term_index_file)
+
+        doc_id_file.close()
+        term_index_file.close()
+        position_list_file.close()
+        position_index_file.close()
 
     def add_document(
         self, doc_id: int, original_docid: str, url: str, title: str, tokens: list[str]
@@ -158,9 +226,17 @@ class InvertedIndex:
         return matched
 
     def get_docs(self, token: str) -> set[int]:
-        res = self.index.get(token, None)
+        res: Optional[int] = self.index_2.get(token, None)[0]
         if res is not None:
-            doc_list, position_list_list = res
+            length_doc_list: int = struct.unpack(
+                "I", self.mm_doc_id_list[res : res + 4]
+            )[0]
+            doc_list = struct.unpack(
+                f"{length_doc_list}I",
+                self.mm_doc_id_list[
+                    res + 4 : res + 4 + length_doc_list * 4
+                ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
+            )
             return set(doc_list)
         else:
             # add the empty set if term not found, so we give no results
