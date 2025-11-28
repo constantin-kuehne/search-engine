@@ -6,7 +6,8 @@ from typing import NamedTuple, Optional
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
-from search_engine.utils import POSTING, DocumentInfo, SearchMode, SearchResult
+from search_engine.utils import (INT_SIZE, POSTING, DocumentInfo, SearchMode,
+                                 SearchResult, get_length_from_bytes)
 
 
 class InvertedIndex:
@@ -149,15 +150,13 @@ class InvertedIndex:
     def get_docs(self, token: str) -> set[int]:
         res: Optional[int] = self.index_2.get(token, None)[0]
         if res is not None:
-            length_term: int = struct.unpack("I", self.mm_doc_id_list[res : res + 4])[0]
-            res += 4 + length_term  # move to the document list
-            length_doc_list: int = struct.unpack(
-                "I", self.mm_doc_id_list[res : res + 4]
-            )[0]
+            length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
+            res += INT_SIZE + length_term  # move to the document list
+            length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
             doc_list = struct.unpack(
                 f"{length_doc_list}I",
                 self.mm_doc_id_list[
-                    res + 4 : res + 4 + length_doc_list * 4
+                    res + INT_SIZE : res + INT_SIZE + length_doc_list * INT_SIZE
                 ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
             )
             return set(doc_list)

@@ -1,5 +1,14 @@
+import struct
 from enum import Enum
 from typing import NamedTuple
+
+LAST_UTF8_CODE_POINT = "ÿ"
+
+INT_SIZE = 4
+
+
+def get_length_from_bytes(bytes_array, offset: int) -> int:
+    return struct.unpack("I", bytes_array[offset : offset + INT_SIZE])[0]
 
 
 class SearchMode(Enum):
