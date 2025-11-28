@@ -6,22 +6,7 @@ from typing import NamedTuple, Optional
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
-from search_engine.utils import SearchMode
-
-POSTING = tuple[list[int], list[list[int]]]
-
-
-class DocumentInfo(NamedTuple):
-    original_docid: str
-    url: str
-    title: str
-
-
-class SearchResult(NamedTuple):
-    doc_id: int
-    original_docid: str
-    url: str
-    title: str
+from search_engine.utils import POSTING, DocumentInfo, SearchMode, SearchResult
 
 
 class InvertedIndex:
@@ -32,13 +17,6 @@ class InvertedIndex:
         file_path_position_index: str,
         file_path_term_index: str,
     ) -> None:
-        self.index: dict[str, POSTING] = {}  # term -> (document list, [postion list])
-        # TODO: use list instead of dict for document ids
-
-        # simplemma + woosh
-
-        self.docs: dict[int, DocumentInfo] = {}
-
         doc_id_file = open(file_path_doc_id, "rb")
         term_index_file = open(file_path_term_index, "rb")
         position_list_file = open(file_path_position_list, mode="rb")
@@ -57,63 +35,6 @@ class InvertedIndex:
         )
 
         doc_id_file.close()
-
-    def save_to_disk(
-        self,
-        file_path_doc_id: str,
-        file_path_position_list: str,
-        file_path_position_index: str,
-        file_path_term_index: str,
-    ) -> None:
-        doc_id_file = open(file_path_doc_id, "w+b")
-        term_index_file = open(file_path_term_index, "wb")
-        position_list_file = open(file_path_position_list, mode="wb")
-        position_index_file = open(file_path_position_index, mode="wb")
-
-        term_index: dict[str, tuple[int, int]] = {}
-
-        for term, (doc_list, position_list_list) in self.index.items():
-            term_index[term] = (doc_id_file.tell(), position_index_file.tell())
-            document_index = []
-
-            doc_id_file.write(struct.pack("I", len(doc_list)))
-            doc_id_file.write(struct.pack(f"{len(doc_list)}I", *doc_list))
-
-            for position_list in position_list_list:
-                document_index.append(position_list_file.tell())
-
-                position_list_file.write(struct.pack("I", len(position_list)))
-                position_list_file.write(
-                    struct.pack(f"{len(position_list)}I", *position_list)
-                )
-
-            position_index_file.write(
-                struct.pack(f"{len(document_index)}I", *document_index)
-            )
-
-        pickle.dump(term_index, term_index_file)
-
-        doc_id_file.close()
-        term_index_file.close()
-        position_list_file.close()
-        position_index_file.close()
-
-    def add_document(
-        self, doc_id: int, original_docid: str, url: str, title: str, tokens: list[str]
-    ) -> None:
-        self.docs[doc_id] = DocumentInfo(
-            original_docid=original_docid, url=url, title=title
-        )
-        for position, term in enumerate(tokens):
-            if term not in self.index:
-                self.index[term] = ([doc_id], [[position]])
-            else:
-                doc_list, position_list_list = self.index[term]
-                if doc_list[-1] != doc_id:
-                    doc_list.append(doc_id)
-                    position_list_list.append([position])
-                else:
-                    position_list_list[-1].append(position)
 
     def has_phrase(self, doc_id: int, tokens: list[str]) -> bool:
         pos_lists = []
@@ -228,6 +149,8 @@ class InvertedIndex:
     def get_docs(self, token: str) -> set[int]:
         res: Optional[int] = self.index_2.get(token, None)[0]
         if res is not None:
+            length_term: int = struct.unpack("I", self.mm_doc_id_list[res : res + 4])[0]
+            res += 4 + length_term  # move to the document list
             length_doc_list: int = struct.unpack(
                 "I", self.mm_doc_id_list[res : res + 4]
             )[0]

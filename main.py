@@ -29,18 +29,18 @@ if __name__ == "__main__":
         "./term_index_file",
     )
 
-    print("Starting indexing...")
-    start = time.time()
+    # print("Starting indexing...")
+    # start = time.time()
 
-    for row in search_engine.ingestion.process_data(
-        "./msmarco-docs.tsv", max_rows=1_000
-    ):
-        index.add_document(
-            row.docid, row.original_docid, row.url, row.title, row.tokens
-        )
+    # for row in search_engine.ingestion.process_data(
+    #     "./msmarco-docs.tsv", max_rows=1_000
+    # ):
+    #     index.add_document(
+    #         row.docid, row.original_docid, row.url, row.title, row.tokens
+    #     )
 
-    end = time.time()
-    print(f"Indexing complete. Took {end - start:.4f}s\n")
+    # end = time.time()
+    # print(f"Indexing complete. Took {end - start:.4f}s\n")
 
     try:
         while True:
