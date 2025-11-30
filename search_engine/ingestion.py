@@ -11,9 +11,9 @@ from typing import Generator, NamedTuple
 
 import search_engine
 from search_engine.preprocessing import tokenize_text
-from search_engine.utils import (INT_SIZE, LAST_UNICODE_CODE_POINT, LAST_UTF8_CODE_POINT, POSTING,
-                                 DocumentInfo, SearchMode,
-                                 get_length_from_bytes)
+from search_engine.utils import (INT_SIZE, LAST_UNICODE_CODE_POINT,
+                                 LAST_UTF8_CODE_POINT, POSTING, DocumentInfo,
+                                 SearchMode, get_length_from_bytes)
 
 csv.field_size_limit(sys.maxsize)
 
@@ -28,6 +28,7 @@ class InvertedIndexIngestion:
         # simplemma + woosh
 
         self.corpus_offset: dict[int, int] = {}
+        self.term_index: dict[str, int] = {}
 
     def save_to_disk(
         self,
@@ -74,6 +75,10 @@ class InvertedIndexIngestion:
     def save_corpus_offset(self, file_path_corpus_offset: str):
         with open(file_path_corpus_offset, "wb") as f:
             pickle.dump(self.corpus_offset, f)
+
+    def save_term_index(self, file_path_term_index: str):
+        with open(file_path_term_index, "wb") as f:
+            pickle.dump(self.term_index, f)
 
     def merge_blocks(
         self,
@@ -131,6 +136,8 @@ class InvertedIndexIngestion:
                 pos : offset_doc_list + INT_SIZE + length_doc_list * INT_SIZE
             ]
             doc_id_file_pos = doc_id_file.tell()
+            self.term_index[current_min] = doc_id_file_pos
+
             file_positions[min_indices[0]] = (
                 offset_doc_list + INT_SIZE + length_doc_list * INT_SIZE
             )
@@ -244,7 +251,8 @@ if __name__ == "__main__":
         "./doc_id_file_merged", "./blocks/doc_id_files/", "doc_id_file_block_"
     )
 
-    index.save_corpus_offset("./corpus_offset")
+    index.save_corpus_offset("./corpus_offset_file")
+    index.save_term_index("./term_index_file")
 
     end = time.time()
     print(f"Indexing complete. Took {end - start:.4f}s\n")

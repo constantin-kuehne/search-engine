@@ -1,4 +1,5 @@
 import bisect
+import csv
 import mmap
 import pickle
 import struct
@@ -17,27 +18,43 @@ class InvertedIndex:
         file_path_position_list: str,
         file_path_position_index: str,
         file_path_term_index: str,
+        file_path_corpus_offset: str,
+        file_path_corpus: str,
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
         term_index_file = open(file_path_term_index, "rb")
-        position_list_file = open(file_path_position_list, mode="rb")
-        position_index_file = open(file_path_position_index, mode="rb")
+        # position_list_file = open(file_path_position_list, mode="rb")
+        # position_index_file = open(file_path_position_index, mode="rb")
+
+        corpus_file = open(file_path_corpus, "rb")
 
         self.index_2 = pickle.load(term_index_file)  # TODO: Set to self.index
 
         self.mm_doc_id_list = mmap.mmap(
             doc_id_file.fileno(), length=0, prot=mmap.PROT_READ
         )
-        self.mm_postion_list = mmap.mmap(
-            position_list_file.fileno(), length=0, prot=mmap.PROT_READ
-        )
-        self.mm_postion_index = mmap.mmap(
-            position_index_file.fileno(), length=0, prot=mmap.PROT_READ
-        )
+
+        # self.mm_postion_list = mmap.mmap(
+        #     position_list_file.fileno(), length=0, prot=mmap.PROT_READ
+        # )
+        # self.mm_postion_index = mmap.mmap(
+        #     position_index_file.fileno(), length=0, prot=mmap.PROT_READ
+        # )
+
+        self.mm_corpus = mmap.mmap(corpus_file.fileno(), length=0, prot=mmap.PROT_READ)
+
+        corpus_offset_file = open(file_path_corpus_offset, "rb")
+        self.docs: dict[int, int] = pickle.load(corpus_offset_file)
+        corpus_offset_file.close()
 
         doc_id_file.close()
 
+        self.reader = lambda x: csv.DictReader(
+            x, delimiter="\t", fieldnames=["docid", "url", "title", "body"]
+        )
+
     def has_phrase(self, doc_id: int, tokens: list[str]) -> bool:
+        raise NotImplementedError("Phrase search not implemented yet.")
         pos_lists = []
         for token in tokens:
             idx = bisect.bisect_left(self.index[token][0], doc_id)
@@ -148,7 +165,7 @@ class InvertedIndex:
         return matched
 
     def get_docs(self, token: str) -> set[int]:
-        res: Optional[int] = self.index_2.get(token, None)[0]
+        res: Optional[int] = self.index_2.get(token, None)
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
             res += INT_SIZE + length_term  # move to the document list
@@ -164,6 +181,19 @@ class InvertedIndex:
             # add the empty set if term not found, so we give no results
             # the correct AND semantic
             return set()
+
+    def get_doc_info(self, doc_id: int) -> DocumentInfo:
+        offset = self.docs[doc_id]
+        next_offset = self.docs.get(doc_id + 1, self.mm_corpus.size())
+        line = self.mm_corpus[offset:next_offset].decode("utf-8")
+        row = next(self.reader([line]))
+        return DocumentInfo(
+            original_docid=row["docid"],
+            url=row["url"],
+            title=row["title"],
+            body=row["body"],
+        )
+
 
     def search(
         self, query: str, mode: SearchMode, num_return: int = 10
@@ -188,14 +218,15 @@ class InvertedIndex:
             print(tokens)
             matched = self.query_evaluator(tokens)
 
-        results = [
-            SearchResult(
-                doc_id=doc_id,
-                original_docid=self.docs[doc_id].original_docid,
-                url=self.docs[doc_id].url,
-                title=self.docs[doc_id].title,
+        results = []
+        for doc_id in matched:
+            doc_info = self.get_doc_info(doc_id)  # Preload document info
+            results.append(
+                SearchResult(
+                    doc_id=doc_id,
+                    original_docid=doc_info.original_docid,
+                    url=doc_info.url,
+                    title=doc_info.title,
+                )
             )
-            for doc_id in matched
-        ]
-
         return len(matched), results[:num_return]
