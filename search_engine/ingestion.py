@@ -34,15 +34,12 @@ class InvertedIndexIngestion:
         self,
         file_path_doc_id: str,
         file_path_position_list: str,
-        file_path_position_index: str,
     ) -> None:
         Path(file_path_doc_id).parent.mkdir(parents=True, exist_ok=True)
         Path(file_path_position_list).parent.mkdir(parents=True, exist_ok=True)
-        Path(file_path_position_index).parent.mkdir(parents=True, exist_ok=True)
 
         doc_id_file = open(file_path_doc_id, "w+b")
         position_list_file = open(file_path_position_list, mode="wb")
-        position_index_file = open(file_path_position_index, mode="wb")
 
         for term, (doc_list, position_list_list) in sorted(self.index.items()):
             document_index = []
@@ -61,16 +58,14 @@ class InvertedIndexIngestion:
                     struct.pack(f"{len(position_list)}I", *position_list)
                 )
 
-            position_index_file.write(
-                struct.pack(f"{len(document_index)}I", *document_index)
-            )
+            assert len(document_index) == len(doc_list)
+            doc_id_file.write(struct.pack(f"{len(document_index)}I", *document_index))
 
         del self.index
         self.index = {}
 
         doc_id_file.close()
         position_list_file.close()
-        position_index_file.close()
 
     def save_corpus_offset(self, file_path_corpus_offset: str):
         with open(file_path_corpus_offset, "wb") as f:
@@ -80,30 +75,98 @@ class InvertedIndexIngestion:
         with open(file_path_term_index, "wb") as f:
             pickle.dump(self.term_index, f)
 
+    @staticmethod
+    def __get_position_list_bytes_and_lengths(
+        bytes_position_list_index,
+        length_doc_list: int,
+        index: int,
+        mm_position_files: list[mmap.mmap],
+    ):
+        lengths_pos_list = []
+
+        first_position_list_offset = struct.unpack(
+            "I",
+            bytes_position_list_index[0:INT_SIZE],
+        )[0]
+
+        length_pos_list = struct.unpack(
+            "I",
+            mm_position_files[index][
+                first_position_list_offset : first_position_list_offset + INT_SIZE
+            ],
+        )[0]
+        lengths_pos_list.append(length_pos_list)
+
+        for i in range(1, length_doc_list):
+            length_pos_list_local = struct.unpack(
+                "I",
+                mm_position_files[index][
+                    first_position_list_offset
+                    + INT_SIZE * i
+                    + length_pos_list * INT_SIZE : first_position_list_offset
+                    + INT_SIZE * i
+                    + length_pos_list * INT_SIZE
+                    + INT_SIZE
+                ],
+            )[0]
+            lengths_pos_list.append(length_pos_list_local)
+
+            length_pos_list += length_pos_list_local
+
+        last_position_list_offset = (
+            first_position_list_offset
+            + length_pos_list * INT_SIZE
+            + length_doc_list * INT_SIZE
+        )
+        assert last_position_list_offset <= mm_position_files[index].size()
+        return mm_position_files[index][
+            first_position_list_offset:last_position_list_offset
+        ], lengths_pos_list
+
     def merge_blocks(
         self,
         file_path_doc_id_merged: str,
-        file_path_block_dir: str,
+        file_path_doc_id_block_dir: str,
         doc_id_file_pattern: str,
+        file_path_position_list_merged: str,
+        file_path_position_list_block_dir: str,
+        position_list_file_pattern: str,
     ):
-        num_files = len(os.listdir(file_path_block_dir))
+        num_files = len(os.listdir(file_path_doc_id_block_dir))
 
         doc_id_file = open(file_path_doc_id_merged, "w+b")
+        postion_list_file = open(file_path_position_list_merged, "wb")
 
-        file_handlers: list[BufferedReader] = []
+        file_handles: list[BufferedReader] = []
+        file_handles_position: list[BufferedReader] = []
 
         mm_files: list[mmap.mmap] = []
         file_positions: list[int] = []
         file_ended: list[bool] = [False] * num_files
 
+        mm_position_files: list[mmap.mmap] = []
+        position_file_positions: list[int] = []
+        position_file_ended: list[bool] = [False] * num_files
+
         for i in range(num_files):
-            file_path = Path(file_path_block_dir) / f"{doc_id_file_pattern}{i}"
-            file_handler = file_path.open("rb")
-            file_handlers.append(file_handler)
+            file_path = Path(file_path_doc_id_block_dir) / f"{doc_id_file_pattern}{i}"
+            file_handle = file_path.open("rb")
+            file_handles.append(file_handle)
             mm_files.append(
-                mmap.mmap(file_handler.fileno(), length=0, prot=mmap.PROT_READ)
+                mmap.mmap(file_handle.fileno(), length=0, prot=mmap.PROT_READ)
             )
-            file_positions.append(file_handler.tell())
+            file_positions.append(file_handle.tell())
+
+            position_file_path = (
+                Path(file_path_position_list_block_dir)
+                / f"{position_list_file_pattern}{i}"
+            )
+            file_handle_position = position_file_path.open("rb")
+            file_handles_position.append(file_handle_position)
+            mm_position_files.append(
+                mmap.mmap(file_handle_position.fileno(), length=0, prot=mmap.PROT_READ)
+            )
+            position_file_positions.append(file_handle_position.tell())
 
         term_list: list[str] = [LAST_UNICODE_CODE_POINT] * num_files
         while not all(file_ended):
@@ -123,32 +186,52 @@ class InvertedIndexIngestion:
                     current_min = term
 
             min_indices = [i for i, term in enumerate(term_list) if term == current_min]
+            index = min_indices[0]
 
             length_term: int = len(current_min.encode("utf-8"))
-            pos = file_positions[min_indices[0]]
+            pos = file_positions[index]
 
             offset_doc_list = pos + INT_SIZE + length_term
             length_doc_list: int = get_length_from_bytes(
-                mm_files[min_indices[0]], offset_doc_list
+                mm_files[index], offset_doc_list
             )
 
-            bytes_in_file = mm_files[min_indices[0]][
+            bytes_in_file = mm_files[index][
                 pos : offset_doc_list + INT_SIZE + length_doc_list * INT_SIZE
             ]
             doc_id_file_pos = doc_id_file.tell()
             self.term_index[current_min] = doc_id_file_pos
 
-            file_positions[min_indices[0]] = (
-                offset_doc_list + INT_SIZE + length_doc_list * INT_SIZE
+            bytes_position_list_index = mm_files[index][
+                offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE : offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE
+            ]
+
+            bytes_position_list, lengths_pos_list = self.__get_position_list_bytes_and_lengths(
+                bytes_position_list_index,
+                length_doc_list,
+                0,
+                mm_position_files,
             )
 
-            if file_positions[min_indices[0]] >= mm_files[min_indices[0]].size():
-                file_ended[min_indices[0]] = True
+            file_positions[index] = (
+                offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE  # this one is the postion list index
+            )
+
+            if file_positions[index] >= mm_files[index].size():
+                file_ended[index] = True
 
             doc_id_file.write(bytes_in_file)
 
             for index in min_indices[1:]:
-                pos = file_positions[min_indices[index]]
+                pos = file_positions[index]
 
                 offset_doc_list_local = pos + INT_SIZE + length_term
                 length_doc_list_local: int = get_length_from_bytes(
@@ -162,9 +245,35 @@ class InvertedIndexIngestion:
                     + INT_SIZE  # we only want to write the doc list therefore we skip the int representing its length
                     + length_doc_list_local * INT_SIZE
                 ]
+
+                bytes_position_list_index_local = mm_files[index][
+                    offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE : offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                ]
+
+                bytes_position_list_local, lengths_pos_list_local = self.__get_position_list_bytes_and_lengths(
+                    bytes_position_list_index_local,
+                    length_doc_list_local,
+                    index,
+                    mm_position_files,
+                )
+
+                bytes_position_list += bytes_position_list_local
+
+                # TODO: make it the correct one by adding current file.tell of postion_list_file to each length in lengths_pos_list_local
+                bytes_position_list_index += bytes_position_list_index_local
+
                 length_doc_list += length_doc_list_local
                 file_positions[index] = (
-                    offset_doc_list_local + INT_SIZE + length_doc_list_local * INT_SIZE
+                    offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list_local
+                    * INT_SIZE  # this one is the postion list index
                 )
 
                 if file_positions[index] >= mm_files[index].size():
@@ -172,14 +281,24 @@ class InvertedIndexIngestion:
 
                 doc_id_file.write(bytes_in_file)
 
+            doc_id_file.write(bytes_position_list_index)
+
             doc_id_file_end_pos = doc_id_file.tell()
 
+            # go back and write the merged length of the doc list
             doc_id_file.seek(doc_id_file_pos + INT_SIZE + length_term)
             doc_id_file.write(struct.pack("I", length_doc_list))
             doc_id_file.seek(doc_id_file_end_pos)
 
-        for file_handler in file_handlers:
-            file_handler.close()
+        for file_handle in file_handles:
+            file_handle.close()
+
+        doc_id_file.close()
+
+        for file_handle in file_handles_position:
+            file_handle.close()
+
+        postion_list_file.close()
 
     def add_document(self, doc_id: int, tokens: list[str]) -> None:
         for position, term in enumerate(tokens):
@@ -229,17 +348,16 @@ if __name__ == "__main__":
     print("Starting indexing...")
     start = time.time()
 
-    block_size = 7_500
+    block_size = 100
     block_num = 0
 
     for pos, row in search_engine.ingestion.process_data(
-        "./msmarco-docs.tsv", max_rows=15_001
+        "./msmarco-docs.tsv", max_rows=201
     ):
         if row.docid > 0 and row.docid % block_size == 0:
             index.save_to_disk(
                 f"./blocks/doc_id_files/doc_id_file_block_{block_num}",
                 f"./blocks/position_list_files/position_list_file_block_{block_num}",
-                f"./blocks/position_list_indices/position_list_index_block_{block_num}",
             )
             block_num += 1
 
@@ -248,7 +366,12 @@ if __name__ == "__main__":
         index.corpus_offset[row.docid] = pos
 
     index.merge_blocks(
-        "./doc_id_file_merged", "./blocks/doc_id_files/", "doc_id_file_block_"
+        "./doc_id_file_merged",
+        "./blocks/doc_id_files/",
+        "doc_id_file_block_",
+        "./position_list_file_merged",
+        "./blocks/position_list_files/",
+        "position_list_file_block_",
     )
 
     index.save_corpus_offset("./corpus_offset_file")
