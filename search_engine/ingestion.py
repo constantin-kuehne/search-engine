@@ -9,8 +9,6 @@ from io import BufferedReader
 from pathlib import Path
 from typing import Generator, NamedTuple
 
-import numpy as np
-
 import search_engine
 from search_engine.preprocessing import tokenize_text
 from search_engine.utils import (INT_SIZE, LAST_UTF8_CODE_POINT, POSTING,
@@ -130,11 +128,11 @@ class InvertedIndexIngestion:
             )
 
             bytes_in_file = mm_files[min_indices[0]][
-                pos : offset_doc_list + INT_SIZE + length_doc_list
+                pos : offset_doc_list + INT_SIZE + length_doc_list * INT_SIZE
             ]
             doc_id_file_pos = doc_id_file.tell()
             file_positions[min_indices[0]] = (
-                offset_doc_list + INT_SIZE + length_doc_list
+                offset_doc_list + INT_SIZE + length_doc_list * INT_SIZE
             )
 
             if file_positions[min_indices[0]] >= mm_files[min_indices[0]].size():
@@ -155,11 +153,11 @@ class InvertedIndexIngestion:
                 ][
                     offset_doc_list_local + INT_SIZE : offset_doc_list_local
                     + INT_SIZE  # we only want to write the doc list therefore we skip the int representing its length
-                    + length_doc_list_local
+                    + length_doc_list_local * INT_SIZE
                 ]
                 length_doc_list += length_doc_list_local
                 file_positions[index] = (
-                    offset_doc_list_local + INT_SIZE + length_doc_list_local
+                    offset_doc_list_local + INT_SIZE + length_doc_list_local * INT_SIZE
                 )
 
                 if file_positions[index] >= mm_files[index].size():
@@ -216,6 +214,7 @@ def process_data(
             pos = file.tell()
             line = file.readline()
             i += 1
+
 
 if __name__ == "__main__":
     index = InvertedIndexIngestion()
