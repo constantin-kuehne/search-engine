@@ -194,7 +194,6 @@ class InvertedIndex:
             body=row["body"],
         )
 
-
     def search(
         self, query: str, mode: SearchMode, num_return: int = 10
     ) -> tuple[int, list[SearchResult]]:
@@ -220,7 +219,7 @@ class InvertedIndex:
 
         results = []
         for doc_id in matched:
-            doc_info = self.get_doc_info(doc_id)  # Preload document info
+            doc_info = self.get_doc_info(doc_id)
             results.append(
                 SearchResult(
                     doc_id=doc_id,
@@ -229,4 +228,5 @@ class InvertedIndex:
                     title=doc_info.title,
                 )
             )
+
         return len(matched), results[:num_return]

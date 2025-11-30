@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-import spacy
+# import spacy
+from simplemma import simple_tokenizer
 
 from search_engine.utils import SearchMode
 
-nlp = spacy.blank("en")
+# nlp = spacy.blank("en")
 
 
 op_precedence = {
@@ -38,7 +39,8 @@ class QueryNode:
 
 def tokenize_text(text: str) -> list[str]:
     # INFO: simplemma or woosh for tokenizers
-    tokens = [token.text for token in nlp(text.lower())]
+    # tokens = [token.text for token in nlp(text.lower())]
+    tokens = simple_tokenizer(text.lower())
     return tokens
 
 

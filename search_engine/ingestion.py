@@ -229,11 +229,11 @@ if __name__ == "__main__":
     print("Starting indexing...")
     start = time.time()
 
-    block_size = 100
+    block_size = 7_500
     block_num = 0
 
     for pos, row in search_engine.ingestion.process_data(
-        "./msmarco-docs.tsv", max_rows=201
+        "./msmarco-docs.tsv", max_rows=15_001
     ):
         if row.docid > 0 and row.docid % block_size == 0:
             index.save_to_disk(
