@@ -3,6 +3,7 @@ from enum import Enum
 from typing import NamedTuple
 
 LAST_UTF8_CODE_POINT = "ÿ"
+LAST_UNICODE_CODE_POINT = "\U0010FFFF"
 
 INT_SIZE = 4
 

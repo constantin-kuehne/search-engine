@@ -11,7 +11,7 @@ from typing import Generator, NamedTuple
 
 import search_engine
 from search_engine.preprocessing import tokenize_text
-from search_engine.utils import (INT_SIZE, LAST_UTF8_CODE_POINT, POSTING,
+from search_engine.utils import (INT_SIZE, LAST_UNICODE_CODE_POINT, LAST_UTF8_CODE_POINT, POSTING,
                                  DocumentInfo, SearchMode,
                                  get_length_from_bytes)
 
@@ -46,8 +46,9 @@ class InvertedIndexIngestion:
         for term, (doc_list, position_list_list) in sorted(self.index.items()):
             document_index = []
 
-            doc_id_file.write(struct.pack("I", len(term)))
-            doc_id_file.write(term.encode("utf-8"))
+            term_bytes = term.encode("utf-8")
+            doc_id_file.write(struct.pack("I", len(term_bytes)))
+            doc_id_file.write(term_bytes)
             doc_id_file.write(struct.pack("I", len(doc_list)))
             doc_id_file.write(struct.pack(f"{len(doc_list)}I", *doc_list))
 
@@ -99,15 +100,14 @@ class InvertedIndexIngestion:
             )
             file_positions.append(file_handler.tell())
 
-        term_list: list[str] = [LAST_UTF8_CODE_POINT] * num_files
+        term_list: list[str] = [LAST_UNICODE_CODE_POINT] * num_files
         while not all(file_ended):
-            current_min = LAST_UTF8_CODE_POINT
+            current_min = LAST_UNICODE_CODE_POINT
             for i, mm_file in enumerate(mm_files):
                 if file_ended[i]:
                     continue
 
                 length_term: int = get_length_from_bytes(mm_file, file_positions[i])
-                print(i)
                 term = mm_file[
                     file_positions[i] + INT_SIZE : file_positions[i]
                     + INT_SIZE
@@ -119,7 +119,7 @@ class InvertedIndexIngestion:
 
             min_indices = [i for i, term in enumerate(term_list) if term == current_min]
 
-            length_term: int = len(current_min)
+            length_term: int = len(current_min.encode("utf-8"))
             pos = file_positions[min_indices[0]]
 
             offset_doc_list = pos + INT_SIZE + length_term
@@ -195,7 +195,7 @@ class PROCESSED_ROW(NamedTuple):
 def process_data(
     file_path: str, max_rows: int | None = None
 ) -> Generator[tuple[int, PROCESSED_ROW], None, None]:
-    with open(file_path, mode="r") as file:
+    with open(file_path, mode="r", encoding="utf-8") as file:
         i = 0
         pos = file.tell()
         line = file.readline()
