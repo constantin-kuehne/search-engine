@@ -188,9 +188,12 @@ class InvertedIndex:
             # phrase search
             tokens = node.value
             doc_list: list[OrderedSet[int]] = []
+            pos_offset_list: list[tuple[int]] = []
             for token in tokens:
-                doc_list.append(self.get_docs(token))
-            return OrderedSet(self.phrase_statement(doc_list, tokens))
+                docs = self.get_docs_phrase(token)
+                doc_list.append(docs[0])
+                pos_offset_list.append(docs[1])
+            return OrderedSet(self.phrase_statement(doc_list, pos_offset_list))
 
         if isinstance(node.value, str):
             return self.get_docs(node.value)
@@ -306,7 +309,7 @@ class InvertedIndex:
             matched = self.query_evaluator(tokens)
 
         results = []
-        for doc_id in matched:
+        for doc_id in matched[:num_return]:
             doc_info = self.get_doc_info(doc_id)
             results.append(
                 SearchResult(
@@ -317,4 +320,4 @@ class InvertedIndex:
                 )
             )
 
-        return len(matched), results[:num_return]
+        return len(matched), results
