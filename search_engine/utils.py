@@ -6,6 +6,7 @@ LAST_UTF8_CODE_POINT = "ÿ"
 LAST_UNICODE_CODE_POINT = "\U0010FFFF"
 
 INT_SIZE = 4
+LONG_SIZE = 8
 
 
 def get_length_from_bytes(bytes_array, offset: int) -> int:

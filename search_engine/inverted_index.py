@@ -10,7 +10,7 @@ from ordered_set import OrderedSet
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
-from search_engine.utils import (INT_SIZE, POSTING, DocumentInfo, SearchMode,
+from search_engine.utils import (INT_SIZE, LONG_SIZE, POSTING, DocumentInfo, SearchMode,
                                  SearchResult, get_length_from_bytes)
 import numpy as np
 
@@ -246,12 +246,12 @@ class InvertedIndex:
                 ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
             )
             pos_offset_list: tuple[int] = struct.unpack(
-                f"{length_doc_list}I",
+                f"{length_doc_list}Q",
                 self.mm_doc_id_list[
                     res + INT_SIZE + length_doc_list * INT_SIZE : res
                     + INT_SIZE
                     + length_doc_list * INT_SIZE
-                    + length_doc_list * INT_SIZE
+                    + length_doc_list * LONG_SIZE
                 ],
             )
 
