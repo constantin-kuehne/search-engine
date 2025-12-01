@@ -23,8 +23,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     index = search_engine.InvertedIndex(
-        "./doc_id_file_merged",
-        "./position_list_file_merged",
+        "./final/doc_id_file_merged_final",
+        "./final/position_list_file_merged_final",
         "./term_index_file",
         "./corpus_offset_file",
         "./msmarco-docs.tsv",
