@@ -8,18 +8,13 @@ from search_engine.inverted_index import SearchMode
 
 @st.cache_resource
 def create_index():
-    index = search_engine.InvertedIndex()
-
-    print("Starting indexing...")
-    start = time.time()
-
-    for row in search_engine.ingestion.process_data(
-        "./msmarco-docs.tsv", max_rows=1_000
-    ):
-        index.add_document(row.docid, row.original_docid, row.url, row.title, row.tokens)
-
-    end = time.time()
-    print(f"Indexing complete. Took {end - start:.4f}s\n")
+    index = search_engine.InvertedIndex(
+        "./doc_id_file_merged",
+        "./position_list_file_merged",
+        "./term_index_file",
+        "./corpus_offset_file",
+        "./msmarco-docs.tsv",
+    )
     return index
 
 
