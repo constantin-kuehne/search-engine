@@ -3,12 +3,16 @@ import csv
 import mmap
 import pickle
 import struct
+from operator import itemgetter
 from typing import NamedTuple, Optional
+
+from ordered_set import OrderedSet
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
 from search_engine.utils import (INT_SIZE, POSTING, DocumentInfo, SearchMode,
                                  SearchResult, get_length_from_bytes)
+import numpy as np
 
 
 class InvertedIndex:
@@ -16,14 +20,13 @@ class InvertedIndex:
         self,
         file_path_doc_id: str,
         file_path_position_list: str,
-        file_path_position_index: str,
         file_path_term_index: str,
         file_path_corpus_offset: str,
         file_path_corpus: str,
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
         term_index_file = open(file_path_term_index, "rb")
-        # position_list_file = open(file_path_position_list, mode="rb")
+        position_list_file = open(file_path_position_list, mode="rb")
         # position_index_file = open(file_path_position_index, mode="rb")
 
         corpus_file = open(file_path_corpus, "rb")
@@ -34,9 +37,9 @@ class InvertedIndex:
             doc_id_file.fileno(), length=0, prot=mmap.PROT_READ
         )
 
-        # self.mm_postion_list = mmap.mmap(
-        #     position_list_file.fileno(), length=0, prot=mmap.PROT_READ
-        # )
+        self.mm_postion_list = mmap.mmap(
+            position_list_file.fileno(), length=0, prot=mmap.PROT_READ
+        )
         # self.mm_postion_index = mmap.mmap(
         #     position_index_file.fileno(), length=0, prot=mmap.PROT_READ
         # )
@@ -53,27 +56,21 @@ class InvertedIndex:
             x, delimiter="\t", fieldnames=["docid", "url", "title", "body"]
         )
 
-    def has_phrase(self, doc_id: int, tokens: list[str]) -> bool:
-        raise NotImplementedError("Phrase search not implemented yet.")
-        pos_lists = []
-        for token in tokens:
-            idx = bisect.bisect_left(self.index[token][0], doc_id)
-            pos_lists.append(self.index[token][1][idx])
-
-        indices = [0 for _ in range(len(pos_lists))]
+    def has_phrase(self, pos_list_list: list[tuple[int]]) -> bool:
+        indices = [0 for _ in range(len(pos_list_list))]
         has_phrase: bool = False
 
-        for _ in range(len(pos_lists[0])):
-            for i, pos_list in enumerate(pos_lists[1:]):
+        for _ in range(len(pos_list_list[0])):
+            for i, pos_list in enumerate(pos_list_list[1:]):
                 while (
-                    pos_list[indices[i + 1]] <= pos_lists[i][indices[i]]
+                    pos_list[indices[i + 1]] <= pos_list_list[i][indices[i]]
                 ):  # +1 because we skip first list
                     indices[i + 1] += 1
 
                     if indices[i + 1] >= len(pos_list):
                         return False
 
-                if pos_list[indices[i + 1]] == pos_lists[i][indices[i]] + 1:
+                if pos_list[indices[i + 1]] == pos_list_list[i][indices[i]] + 1:
                     has_phrase = True
                 else:
                     has_phrase = False
@@ -86,7 +83,7 @@ class InvertedIndex:
 
         return has_phrase
 
-    def and_statement(self, doc_list: list[set[int]]) -> list[int]:
+    def and_statement(self, doc_list: list[OrderedSet[int]]) -> list[int]:
         matched = []
         if len(doc_list) == 1:
             matched = list(doc_list[0])
@@ -95,7 +92,7 @@ class InvertedIndex:
 
         return matched
 
-    def or_statement(self, doc_list: list[set[int]]) -> list[int]:
+    def or_statement(self, doc_list: list[OrderedSet[int]]) -> list[int]:
         matched = []
         if len(doc_list) == 1:
             matched = list(doc_list[0])
@@ -104,56 +101,101 @@ class InvertedIndex:
 
         return matched
 
-    def not_statement(self, doc_list: list[set[int]]) -> list[int]:
+    def not_statement(self, doc_list: list[OrderedSet[int]]) -> list[int]:
         matched = []
         if len(doc_list) == 0:
             matched = list(self.docs.keys())
         else:
-            matched = list(set(self.docs.keys()).difference(*doc_list))
+            matched = list(OrderedSet(self.docs.keys()).difference(*doc_list))
 
         return matched
 
+    def intersection_phrase(
+        self, docs_per_token: list[OrderedSet[int]], doc_pos_per_token: list[tuple[int]]
+    ) -> tuple[OrderedSet[int], list[tuple[int]]]:
+        intersection = docs_per_token[0].intersection(*docs_per_token[1:])
+        indices_per_token = [
+            [bisect.bisect_left(x, y) for y in intersection] for x in docs_per_token
+        ]
+
+        assert all(len(lst) == len(indices_per_token[0]) for lst in indices_per_token)
+
+        new_pos_list_per_token: list[tuple[int]] = []
+        for i, pos_list in enumerate(doc_pos_per_token):
+            getter = itemgetter(*indices_per_token[i])
+            new_pos_list: tuple[int] = getter(pos_list)
+            if isinstance(new_pos_list, int):
+                new_pos_list = (new_pos_list,)
+            new_pos_list_per_token.append(new_pos_list)
+
+        new_pos_list_per_doc = np.array(new_pos_list_per_token).T.tolist()
+        return intersection, new_pos_list_per_doc
+
     def phrase_statement(
-        self, doc_list: list[set[int]], tokens: list[str]
+        self,
+        docs_per_token: list[OrderedSet[int]],
+        doc_pos_offset_per_token: list[tuple[int]],
     ) -> list[int]:
         matched = []
-        if len(doc_list) == 1:
-            matched = list(doc_list[0])
-        elif len(doc_list) > 1:
-            match_candidates = doc_list[0].intersection(*doc_list[1:])
+        if len(docs_per_token) == 1:
+            matched = list(docs_per_token[0])
+        elif len(docs_per_token) > 1:
+            match_candidates, doc_pos_per_token_candidates = self.intersection_phrase(
+                docs_per_token, doc_pos_offset_per_token
+            )
+
+            doc_pos_list_per_token: list[list[tuple[int]]] = []
+            for pos_offset_tuple in doc_pos_per_token_candidates:
+                pos_list_token: list[tuple[int]] = []
+                for pos_offset in pos_offset_tuple:
+                    length_pos_list = struct.unpack(
+                        "I", self.mm_postion_list[pos_offset : pos_offset + INT_SIZE]
+                    )[0]
+                    pos_list: tuple[int] = struct.unpack(
+                        f"{length_pos_list}I",
+                        self.mm_postion_list[
+                            pos_offset + INT_SIZE : pos_offset
+                            + INT_SIZE
+                            + length_pos_list * INT_SIZE
+                        ],
+                    )
+                    pos_list_token.append(pos_list)
+                doc_pos_list_per_token.append(pos_list_token)
             matched = []
-            for doc_id in match_candidates:
-                if self.has_phrase(doc_id, tokens):
+            for doc_id, pos_list_per_token in zip(
+                match_candidates, doc_pos_list_per_token
+            ):
+                if self.has_phrase(pos_list_per_token):
                     matched.append(doc_id)
 
         return matched
 
-    def evaluate_subtree(self, node) -> set[int]:
+    def evaluate_subtree(self, node) -> OrderedSet[int]:
         if isinstance(node.value, SearchMode):
             if node.value == SearchMode.AND:
                 left_result = self.evaluate_subtree(node.left)
                 right_result = self.evaluate_subtree(node.right)
-                return set(self.and_statement([left_result, right_result]))
+                return OrderedSet(self.and_statement([left_result, right_result]))
             elif node.value == SearchMode.OR:
                 left_result = self.evaluate_subtree(node.left)
                 right_result = self.evaluate_subtree(node.right)
-                return set(self.or_statement([left_result, right_result]))
+                return OrderedSet(self.or_statement([left_result, right_result]))
             elif node.value == SearchMode.NOT:
                 left_result = self.evaluate_subtree(node.left)
-                return set(self.not_statement([left_result]))
+                return OrderedSet(self.not_statement([left_result]))
 
         if isinstance(node.value, list):
             # phrase search
             tokens = node.value
-            doc_list: list[set[int]] = []
+            doc_list: list[OrderedSet[int]] = []
             for token in tokens:
                 doc_list.append(self.get_docs(token))
-            return set(self.phrase_statement(doc_list, tokens))
+            return OrderedSet(self.phrase_statement(doc_list, tokens))
 
         if isinstance(node.value, str):
             return self.get_docs(node.value)
 
-        return set()
+        return OrderedSet([])
 
     def query_evaluator(self, tokens: list[str]) -> list[int]:
         matched: list[int] = []
@@ -164,7 +206,10 @@ class InvertedIndex:
 
         return matched
 
-    def get_docs(self, token: str) -> set[int]:
+    def get_docs(
+        self,
+        token: str,
+    ) -> OrderedSet[int]:
         res: Optional[int] = self.index_2.get(token, None)
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
@@ -176,11 +221,43 @@ class InvertedIndex:
                     res + INT_SIZE : res + INT_SIZE + length_doc_list * INT_SIZE
                 ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
             )
-            return set(doc_list)
+            return OrderedSet(doc_list)
         else:
             # add the empty set if term not found, so we give no results
             # the correct AND semantic
-            return set()
+            return OrderedSet([])
+
+    def get_docs_phrase(
+        self,
+        token: str,
+    ) -> tuple[OrderedSet[int], tuple[int]]:
+        res: Optional[int] = self.index_2.get(token, None)
+        if res is not None:
+            length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
+            res += INT_SIZE + length_term  # move to the document list
+            length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
+            doc_list = struct.unpack(
+                f"{length_doc_list}I",
+                self.mm_doc_id_list[
+                    res + INT_SIZE : res + INT_SIZE + length_doc_list * INT_SIZE
+                ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
+            )
+            pos_offset_list: tuple[int] = struct.unpack(
+                f"{length_doc_list}I",
+                self.mm_doc_id_list[
+                    res + INT_SIZE + length_doc_list * INT_SIZE : res
+                    + INT_SIZE
+                    + length_doc_list * INT_SIZE
+                    + length_doc_list * INT_SIZE
+                ],
+            )
+
+            return OrderedSet(doc_list), pos_offset_list
+        else:
+            # add the empty set if term not found, so we give no results
+            # the correct AND semantic
+            empty_tuple: tuple[int] = tuple([])
+            return OrderedSet([]), empty_tuple
 
     def get_doc_info(self, doc_id: int) -> DocumentInfo:
         offset = self.docs[doc_id]
@@ -199,10 +276,22 @@ class InvertedIndex:
     ) -> tuple[int, list[SearchResult]]:
         tokens = tokenize_text(query)
 
-        if mode != SearchMode.QUERY_EVALUATOR:
-            doc_list: list[set[int]] = []
-            for token in tokens:
-                doc_list.append(self.get_docs(token))
+        match mode:
+            case SearchMode.PHRASE:
+                doc_list: list[OrderedSet[int]] = []
+                pos_offset_list: list[tuple[int]] = []
+                for token in tokens:
+                    docs = self.get_docs_phrase(token)
+                    doc_list.append(docs[0])
+                    pos_offset_list.append(docs[1])
+            case SearchMode.AND | SearchMode.OR | SearchMode.NOT:
+                doc_list: list[OrderedSet[int]] = []
+                for token in tokens:
+                    doc_list.append(self.get_docs(token))
+            case SearchMode.QUERY_EVALUATOR:
+                pass
+            case _:
+                raise ValueError(f"Unsupported search mode: {mode}")
 
         matched = []
         if mode == SearchMode.AND:
@@ -212,9 +301,8 @@ class InvertedIndex:
         elif mode == SearchMode.NOT:
             matched = self.not_statement(doc_list)
         elif mode == SearchMode.PHRASE:
-            matched = self.phrase_statement(doc_list, tokens)
+            matched = self.phrase_statement(doc_list, pos_offset_list)
         elif mode == SearchMode.QUERY_EVALUATOR:
-            print(tokens)
             matched = self.query_evaluator(tokens)
 
         results = []

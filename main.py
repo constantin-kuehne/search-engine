@@ -24,8 +24,7 @@ if __name__ == "__main__":
 
     index = search_engine.InvertedIndex(
         "./doc_id_file_merged",
-        "./position_list_file",
-        "./position_list_index",
+        "./position_list_file_merged",
         "./term_index_file",
         "./corpus_offset_file",
         "./msmarco-docs.tsv",
