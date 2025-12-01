@@ -286,7 +286,7 @@ class InvertedIndexIngestion:
                 doc_id_file.write(bytes_in_file)
 
             doc_id_file.write(
-                struct.pack(f"{len(offsets_pos_list)}I", *offsets_pos_list)
+                struct.pack(f"{len(offsets_pos_list)}Q", *offsets_pos_list)
             )
 
             doc_id_file_end_pos = doc_id_file.tell()
@@ -332,7 +332,7 @@ def process_data(
         pos = file.tell()
         line = file.readline()
         while line:
-            if i % 1_000 == 0:
+            if i % 10_000 == 0:
                 print(f"Processed {i} rows")
 
             if max_rows is not None and i >= max_rows:
@@ -357,8 +357,9 @@ if __name__ == "__main__":
     block_size = 7_500
     block_num = 0
 
+    print("Starting processing rows...")
     for pos, row in search_engine.ingestion.process_data(
-        "./msmarco-docs.tsv", max_rows=15_001
+        "./msmarco-docs.tsv", max_rows=15_000
     ):
         if row.docid > 0 and row.docid % block_size == 0:
             index.save_to_disk(
@@ -370,7 +371,9 @@ if __name__ == "__main__":
         index.add_document(row.docid, row.tokens)
 
         index.corpus_offset[row.docid] = pos
+    print("Finished processing rows.")
 
+    print("Stratting merging blocks...")
     index.merge_blocks(
         "./doc_id_file_merged",
         "./blocks/doc_id_files/",
@@ -379,6 +382,7 @@ if __name__ == "__main__":
         "./blocks/position_list_files/",
         "position_list_file_block_",
     )
+    print("Finished merging blocks.")
 
     index.save_corpus_offset("./corpus_offset_file")
     index.save_term_index("./term_index_file")
