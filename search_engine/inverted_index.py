@@ -38,7 +38,7 @@ class InvertedIndex:
             doc_id_file.fileno(), length=0, prot=mmap.PROT_READ
         )
 
-        self.mm_postion_list = mmap.mmap(
+        self.mm_position_list = mmap.mmap(
             position_list_file.fileno(), length=0, prot=mmap.PROT_READ
         )
         # self.mm_postion_index = mmap.mmap(
@@ -154,11 +154,11 @@ class InvertedIndex:
                 pos_list_token: list[tuple[int]] = []
                 for pos_offset in pos_offset_tuple:
                     length_pos_list = struct.unpack(
-                        "I", self.mm_postion_list[pos_offset + INT_SIZE : pos_offset + INT_SIZE *2]
+                        "I", self.mm_position_list[pos_offset: pos_offset + INT_SIZE]
                     )[0]
                     pos_list: tuple[int] = struct.unpack(
                         f"{length_pos_list}I",
-                        self.mm_postion_list[
+                        self.mm_position_list[
                             pos_offset + INT_SIZE : pos_offset
                             + INT_SIZE
                             + length_pos_list * INT_SIZE
