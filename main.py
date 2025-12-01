@@ -1,5 +1,6 @@
 import argparse
 import time
+from pathlib import Path
 
 import search_engine
 from search_engine.inverted_index import SearchMode
@@ -22,13 +23,19 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    final_dir = Path("./final/")
+
+    print("Loading inverted index from disk...")
+    start = time.time()
     index = search_engine.InvertedIndex(
-        "./final/doc_id_file_merged_final",
-        "./final/position_list_file_merged_final",
-        "./term_index_file",
-        "./corpus_offset_file",
+        final_dir / "doc_id_file_merged_final",
+        final_dir / "position_list_file_merged_final",
+        final_dir / "term_index_file",
+        final_dir / "corpus_offset_file",
         "./msmarco-docs.tsv",
     )
+    end = time.time()
+    print(f"Index loaded. Took {end - start:.4f}s\n")
 
     # print("Starting indexing...")
     # start = time.time()

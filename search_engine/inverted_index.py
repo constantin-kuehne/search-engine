@@ -1,6 +1,7 @@
 import bisect
 import csv
 import mmap
+from pathlib import Path
 import pickle
 import struct
 from operator import itemgetter
@@ -18,11 +19,11 @@ import numpy as np
 class InvertedIndex:
     def __init__(
         self,
-        file_path_doc_id: str,
-        file_path_position_list: str,
-        file_path_term_index: str,
-        file_path_corpus_offset: str,
-        file_path_corpus: str,
+        file_path_doc_id: str | Path,
+        file_path_position_list: str | Path,
+        file_path_term_index: str | Path,
+        file_path_corpus_offset: str | Path,
+        file_path_corpus: str | Path,
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
         term_index_file = open(file_path_term_index, "rb")
@@ -128,6 +129,10 @@ class InvertedIndex:
                 new_pos_list = (new_pos_list,)
             new_pos_list_per_token.append(new_pos_list)
 
+
+        print(len(new_pos_list_per_token[0]))
+        assert all(len(lst) == len(new_pos_list_per_token[0]) for lst in new_pos_list_per_token)
+
         new_pos_list_per_doc = np.array(new_pos_list_per_token).T.tolist()
         return intersection, new_pos_list_per_doc
 
@@ -140,16 +145,16 @@ class InvertedIndex:
         if len(docs_per_token) == 1:
             matched = list(docs_per_token[0])
         elif len(docs_per_token) > 1:
-            match_candidates, doc_pos_per_token_candidates = self.intersection_phrase(
+            match_candidates, pos_tokens_per_doc_candidate = self.intersection_phrase(
                 docs_per_token, doc_pos_offset_per_token
             )
 
-            doc_pos_list_per_token: list[list[tuple[int]]] = []
-            for pos_offset_tuple in doc_pos_per_token_candidates:
+            pos_list_tokens_per_doc: list[list[tuple[int]]] = []
+            for pos_offset_tuple in pos_tokens_per_doc_candidate:
                 pos_list_token: list[tuple[int]] = []
                 for pos_offset in pos_offset_tuple:
                     length_pos_list = struct.unpack(
-                        "I", self.mm_postion_list[pos_offset : pos_offset + INT_SIZE]
+                        "I", self.mm_postion_list[pos_offset + INT_SIZE : pos_offset + INT_SIZE *2]
                     )[0]
                     pos_list: tuple[int] = struct.unpack(
                         f"{length_pos_list}I",
@@ -160,10 +165,11 @@ class InvertedIndex:
                         ],
                     )
                     pos_list_token.append(pos_list)
-                doc_pos_list_per_token.append(pos_list_token)
+                pos_list_tokens_per_doc.append(pos_list_token)
+
             matched = []
             for doc_id, pos_list_per_token in zip(
-                match_candidates, doc_pos_list_per_token
+                match_candidates, pos_list_tokens_per_doc
             ):
                 if self.has_phrase(pos_list_per_token):
                     matched.append(doc_id)

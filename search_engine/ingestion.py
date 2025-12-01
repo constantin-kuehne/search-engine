@@ -34,11 +34,16 @@ class InvertedIndexIngestion:
 
     def save_to_disk(
         self,
-        file_path_doc_id: str,
-        file_path_position_list: str,
+        file_path_doc_id: str | Path,
+        file_path_position_list: str | Path,
     ) -> None:
-        Path(file_path_doc_id).parent.mkdir(parents=True, exist_ok=True)
-        Path(file_path_position_list).parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(file_path_doc_id, str):
+            file_path_doc_id = Path(file_path_doc_id)
+        if isinstance(file_path_position_list, str):
+            file_path_position_list = Path(file_path_position_list)
+
+        file_path_doc_id.parent.mkdir(parents=True, exist_ok=True)
+        file_path_position_list.parent.mkdir(parents=True, exist_ok=True)
 
         doc_id_file = open(file_path_doc_id, "w+b")
         position_list_file = open(file_path_position_list, mode="wb")
@@ -69,11 +74,11 @@ class InvertedIndexIngestion:
         doc_id_file.close()
         position_list_file.close()
 
-    def save_corpus_offset(self, file_path_corpus_offset: str):
+    def save_corpus_offset(self, file_path_corpus_offset: str | Path):
         with open(file_path_corpus_offset, "wb") as f:
             pickle.dump(self.corpus_offset, f)
 
-    def save_term_index(self, file_path_term_index: str):
+    def save_term_index(self, file_path_term_index: str | Path):
         with open(file_path_term_index, "wb") as f:
             pickle.dump(self.term_index, f)
 
@@ -88,58 +93,45 @@ class InvertedIndexIngestion:
         offsets_pos_list: list[int] = []
 
         first_position_list_offset = struct.unpack(
-            "I",
-            bytes_position_list_index[0:INT_SIZE],
-        )[0]
-
-        length_pos_list = struct.unpack(
-            "I",
-            mm_position_files[index][
-                first_position_list_offset : first_position_list_offset + INT_SIZE
-            ],
+            "Q",
+            bytes_position_list_index[0:LONG_SIZE],
         )[0]
 
         offsets_pos_list.append(current_offset)
 
-        for i in range(1, length_doc_list):
-            if i < length_doc_list:
-                offsets_pos_list.append(
-                    current_offset + INT_SIZE * i + length_pos_list * LONG_SIZE
-                )
+        current_block_pos_offset = first_position_list_offset
+        accumulated_byte_size = 0
 
+        for i in range(length_doc_list):
             length_pos_list_local = struct.unpack(
                 "I",
                 mm_position_files[index][
-                    first_position_list_offset
-                    + INT_SIZE * i
-                    + length_pos_list * INT_SIZE : first_position_list_offset
-                    + INT_SIZE * i
-                    + length_pos_list * INT_SIZE
-                    + INT_SIZE
+                    current_block_pos_offset : current_block_pos_offset + INT_SIZE
                 ],
             )[0]
 
-            length_pos_list += length_pos_list_local
+            size_of_current_pos_list_block = INT_SIZE + length_pos_list_local * INT_SIZE
 
-        last_position_list_offset = (
-            first_position_list_offset
-            + length_doc_list * INT_SIZE
-            + length_pos_list * INT_SIZE
-        )
+            current_block_pos_offset += size_of_current_pos_list_block
+            
+            accumulated_byte_size += size_of_current_pos_list_block
+            
+            if i < length_doc_list - 1:
+                offsets_pos_list.append(current_offset + accumulated_byte_size)
 
         assert len(offsets_pos_list) == length_doc_list
 
         return mm_position_files[index][
-            first_position_list_offset:last_position_list_offset
+            first_position_list_offset:current_block_pos_offset
         ], offsets_pos_list
 
     def merge_blocks(
         self,
-        file_path_doc_id_merged: str,
-        file_path_doc_id_block_dir: str,
+        file_path_doc_id_merged: str | Path,
+        file_path_doc_id_block_dir: str | Path,
         doc_id_file_pattern: str,
-        file_path_position_list_merged: str,
-        file_path_position_list_block_dir: str,
+        file_path_position_list_merged: str | Path,
+        file_path_position_list_block_dir: str | Path,
         position_list_file_pattern: str,
         start_block: int,
         end_block: int,
@@ -361,27 +353,27 @@ def process_data(
             i += 1
 
 
-def process_chunk(chunk: list[PROCESSED_ROW], block_num: int) -> None:
+def process_chunk(chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path) -> None:
     local_index = InvertedIndexIngestion()
 
     for row in chunk:
         local_index.add_document(row.docid, row.tokens)
 
     local_index.save_to_disk(
-        f"./blocks/doc_id_files/doc_id_file_block_{block_num}",
-        f"./blocks/position_list_files/position_list_file_block_{block_num}",
+        blocks_dir / f"doc_id_files/doc_id_file_block_{block_num}",
+        blocks_dir / f"position_list_files/position_list_file_block_{block_num}",
     )
     del local_index
 
 
-def merge_blocks(current_start: int, current_end: int, i: int):
+def merge_blocks(current_start: int, current_end: int, i: int, staged_dir: Path, blocks_dir: Path) -> None:
     local_index = InvertedIndexIngestion()
     local_index.merge_blocks(
-        f"./staged/doc_id_files/doc_id_file_merged_{i}",
-        "./blocks/doc_id_files/",
+        staged_dir / f"doc_id_files/doc_id_file_merged_{i}",
+        blocks_dir / "doc_id_files/",
         "doc_id_file_block_",
-        f"./staged/position_list_files/position_list_file_merged_{i}",
-        "./blocks/position_list_files/",
+        staged_dir / f"position_list_files/position_list_file_merged_{i}",
+        blocks_dir / "position_list_files/",
         "position_list_file_block_",
         current_start,
         current_end,
@@ -390,29 +382,35 @@ def merge_blocks(current_start: int, current_end: int, i: int):
 
 
 if __name__ == "__main__":
+    blocks_dir = Path("./blocks/")
+    staged_dir = Path("./staged/")
+    final_dir = Path("./final/")
+
     index = InvertedIndexIngestion()
 
     print("Starting indexing...")
     start = time.time()
 
     block_size = 7_500
+    # block_size = 500
     block_num = 0
+
+    max_rows = 3_400_000
+    # max_rows = 15_001
 
     num_processes = (os.cpu_count() or 6) - 2
 
     print("Starting processing rows...")
     chunk = []
-    blocks_to_process = []
 
     with Pool(processes=num_processes) as pool:
         print(f"Starting processing rows with a pool of {num_processes} processes...")
         for pos, row in search_engine.ingestion.process_data(
-            "./msmarco-docs.tsv", max_rows=3_400_000
+            "./msmarco-docs.tsv", max_rows=max_rows
         ):
             chunk.append(row)
             if row.docid > 0 and row.docid % block_size == 0:
-                pool.apply_async(process_chunk, args=(chunk, block_num))
-                blocks_to_process.append(block_num)
+                pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir))
 
                 chunk = []
                 block_num += 1
@@ -420,9 +418,9 @@ if __name__ == "__main__":
             index.corpus_offset[row.docid] = pos
 
         if chunk:
-            pool.apply_async(process_chunk, args=(chunk, block_num))
-            blocks_to_process.append(block_num)
-            block_num += 1
+            pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir))
+
+        del chunk
 
         pool.close()
         pool.join()
@@ -432,7 +430,7 @@ if __name__ == "__main__":
     print("Starting merging blocks...")
     start_merge = time.time()
 
-    num_files = len(os.listdir("./blocks/doc_id_files/"))
+    num_files = len(os.listdir(blocks_dir / "doc_id_files/"))
     length_one_stage = min(num_processes, num_files)
 
     current_start = 0
@@ -441,7 +439,7 @@ if __name__ == "__main__":
         for i, current_end in enumerate(
             range(length_one_stage, num_files + 1, length_one_stage)
         ):
-            pool.apply_async(merge_blocks, args=(current_start, current_end, i))
+            pool.apply_async(merge_blocks, args=(current_start, current_end, i, staged_dir, blocks_dir))
             current_start = current_end
         pool.close()
         pool.join()
@@ -450,42 +448,42 @@ if __name__ == "__main__":
     rest_files = num_files % length_one_stage
     if rest_files > 0 and rest_files < length_one_stage:
         index.merge_blocks(
-            f"./staged/doc_id_files/doc_id_file_merged_{i}",
-            "./blocks/doc_id_files/",
+            staged_dir / f"doc_id_files/doc_id_file_merged_{i}",
+            blocks_dir / "doc_id_files/",
             "doc_id_file_block_",
-            f"./staged/position_list_files/position_list_file_merged_{i}",
-            "./blocks/position_list_files/",
+            staged_dir / f"position_list_files/position_list_file_merged_{i}",
+            blocks_dir / "position_list_files/",
             "position_list_file_block_",
             current_start,
             num_files,
         )
 
-    num_files = len(os.listdir("./staged/doc_id_files/"))
+    num_files = len(os.listdir(staged_dir / "doc_id_files/"))
     if num_files >= 2:
         index.merge_blocks(
-            "./final/doc_id_file_merged_final",
-            "./staged/doc_id_files/",
+            final_dir / "doc_id_file_merged_final",
+            staged_dir / "doc_id_files/",
             "doc_id_file_merged_",
-            "./final/position_list_file_merged_final",
-            "./staged/position_list_files/",
+            final_dir / "position_list_file_merged_final",
+            staged_dir / "position_list_files/",
             "position_list_file_merged_",
             0,
             num_files,
         )
     else:
         os.rename(
-            "./staged/doc_id_files/doc_id_file_merged_0",
-            "./final/doc_id_file_merged_final",
+            staged_dir / "doc_id_files/doc_id_file_merged_0",
+            final_dir / "doc_id_file_merged_final",
         )
         os.rename(
-            "./staged/position_list_files/position_list_file_merged_0",
-            "./final/position_list_file_merged_final",
+            staged_dir / "position_list_files/position_list_file_merged_0",
+            final_dir / "position_list_file_merged_final",
         )
 
     print(f"Finished merging blocks in {time.time() - start_merge:.4f}s")
 
-    index.save_corpus_offset("./corpus_offset_file")
-    index.save_term_index("./term_index_file")
+    index.save_corpus_offset( final_dir / "corpus_offset_file")
+    index.save_term_index(final_dir / "term_index_file")
 
     end = time.time()
     print(f"Indexing complete. Took {end - start:.4f}s\n")
