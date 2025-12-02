@@ -13,7 +13,6 @@ from search_engine.preprocessing import (build_query_tree, shunting_yard,
 from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode,
                                  SearchResult, get_length_from_bytes)
 
-
 class InvertedIndex:
     def __init__(
         self,
@@ -44,9 +43,10 @@ class InvertedIndex:
 
         corpus_offset_file = open(file_path_corpus_offset, "rb")
         self.docs: dict[int, int] = pickle.load(corpus_offset_file)
+
         corpus_offset_file.close()
 
-        doc_id_file.close()
+        term_index_file.close()
 
         self.reader = lambda x: csv.DictReader(
             x, delimiter="\t", fieldnames=["docid", "url", "title", "body"]
@@ -289,7 +289,7 @@ class InvertedIndex:
         )
 
     def search(
-        self, query: str, mode: SearchMode, num_return: int = 10
+        self, query: str, mode: SearchMode, num_return: int = 10, length_body: int = 50
     ) -> tuple[int, list[SearchResult]]:
         tokens = tokenize_text(query)
 
@@ -330,6 +330,7 @@ class InvertedIndex:
                     original_docid=doc_info.original_docid,
                     url=doc_info.url,
                     title=doc_info.title,
+                    body=doc_info.body[:length_body],
                 )
             )
 

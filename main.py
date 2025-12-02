@@ -62,7 +62,7 @@ if __name__ == "__main__":
             print(f"We found {num_results} results matching your query.")
             print(f"{args.num_return} of them are:")
             for result in results:
-                print(f"DocId: {result.original_docid} ({result.url}) - {result.title}")
+                print(f"DocId: {result.original_docid} ({result.url}) - {result.title} - Body (50 chars): {result.body}")
 
             end = time.time()
             print(f"\nSearch took {end - start:.4f} seconds.")

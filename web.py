@@ -30,7 +30,7 @@ if query:
     start = time.time()
 
     num_results, results = index.search(
-        query, mode=SearchMode.QUERY_EVALUATOR, num_return=10
+        query, mode=SearchMode.QUERY_EVALUATOR, num_return=10, length_body=200
     )
     end = time.time()
 
@@ -40,4 +40,6 @@ if query:
     st.write(f"{min([num_return, num_results])} of them are:")
 
     for result in results:
-        st.write(f"DocId: {result.original_docid} ({result.url}) - {result.title}")
+        st.divider()
+        st.write(f"DocId: {result.original_docid} ({result.url}) - {result.title}\n")
+        st.write(result.body)
