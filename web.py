@@ -1,3 +1,4 @@
+from pathlib import Path
 import time
 
 import streamlit as st
@@ -8,11 +9,12 @@ from search_engine.inverted_index import SearchMode
 
 @st.cache_resource
 def create_index():
+    final_dir =    Path("./final/")
     index = search_engine.InvertedIndex(
-        "./doc_id_file_merged",
-        "./position_list_file_merged",
-        "./term_index_file",
-        "./corpus_offset_file",
+        final_dir / "doc_id_file_merged_final",
+        final_dir / "position_list_file_merged_final",
+        final_dir / "term_index_file",
+        final_dir / "corpus_offset_file",
         "./msmarco-docs.tsv",
     )
     return index
