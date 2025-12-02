@@ -115,26 +115,35 @@ class InvertedIndex:
         self, docs_per_token: list[OrderedSet[int]], doc_pos_per_token: list[tuple[int]]
     ) -> tuple[OrderedSet[int], list[tuple[int]]]:
         intersection = docs_per_token[0].intersection(*docs_per_token[1:])
-        indices_per_token = [
-            [bisect.bisect_left(x, y) for y in intersection] for x in docs_per_token
-        ]
 
-        assert all(len(lst) == len(indices_per_token[0]) for lst in indices_per_token)
+        if len(intersection) == 0:
+            return intersection, []
 
-        new_pos_list_per_token: list[tuple[int]] = []
+        # Two-pointer approach: since sets are sorted, walk through linearly
+        indices_per_token = []
+        for doc_list in docs_per_token:
+            indices = []
+            doc_idx = 0
+            doc_list_items = list(doc_list)  # Convert once
+
+            for target in intersection:
+                # Walk forward until we find the target
+                while doc_idx < len(doc_list_items) and doc_list_items[doc_idx] < target:
+                    doc_idx += 1
+                indices.append(doc_idx)
+
+            indices_per_token.append(indices)
+
+        new_pos_list_per_token = []
         for i, pos_list in enumerate(doc_pos_per_token):
             getter = itemgetter(*indices_per_token[i])
-            new_pos_list: tuple[int] = getter(pos_list)
+            new_pos_list = getter(pos_list)
             if isinstance(new_pos_list, int):
                 new_pos_list = (new_pos_list,)
             new_pos_list_per_token.append(new_pos_list)
 
+        return intersection, list(zip(*new_pos_list_per_token))
 
-        print(len(new_pos_list_per_token[0]))
-        assert all(len(lst) == len(new_pos_list_per_token[0]) for lst in new_pos_list_per_token)
-
-        new_pos_list_per_doc = np.array(new_pos_list_per_token).T.tolist()
-        return intersection, new_pos_list_per_doc
 
     def phrase_statement(
         self,
@@ -148,6 +157,9 @@ class InvertedIndex:
             match_candidates, pos_tokens_per_doc_candidate = self.intersection_phrase(
                 docs_per_token, doc_pos_offset_per_token
             )
+
+            if len(match_candidates) == 0:
+                return matched
 
             pos_list_tokens_per_doc: list[list[tuple[int]]] = []
             for pos_offset_tuple in pos_tokens_per_doc_candidate:
@@ -167,7 +179,7 @@ class InvertedIndex:
                     pos_list_token.append(pos_list)
                 pos_list_tokens_per_doc.append(pos_list_token)
 
-            matched = []
+
             for doc_id, pos_list_per_token in zip(
                 match_candidates, pos_list_tokens_per_doc
             ):
