@@ -41,9 +41,6 @@ class InvertedIndex:
         self.mm_position_list = mmap.mmap(
             position_list_file.fileno(), length=0, prot=mmap.PROT_READ
         )
-        # self.mm_postion_index = mmap.mmap(
-        #     position_index_file.fileno(), length=0, prot=mmap.PROT_READ
-        # )
 
         self.mm_corpus = mmap.mmap(corpus_file.fileno(), length=0, prot=mmap.PROT_READ)
 
@@ -147,7 +144,7 @@ class InvertedIndex:
 
     def phrase_statement(
         self,
-        docs_per_token: list[SetLike[int]],
+        docs_per_token: list[tuple[int]],
         doc_pos_offset_per_token: list[tuple[int]],
     ) -> list[int]:
         matched = []
@@ -197,10 +194,10 @@ class InvertedIndex:
             elif node.value == SearchMode.OR:
                 left_result = self.evaluate_subtree(node.left)
                 right_result = self.evaluate_subtree(node.right)
-                return OrderedSet(self.or_statement([left_result, right_result]))
+                return self.or_statement([left_result, right_result])
             elif node.value == SearchMode.NOT:
                 left_result = self.evaluate_subtree(node.left)
-                return OrderedSet(self.not_statement([left_result]))
+                return self.not_statement([left_result])
 
         if isinstance(node.value, list):
             # phrase search
@@ -211,12 +208,12 @@ class InvertedIndex:
                 docs = self.get_docs_phrase(token)
                 doc_list.append(docs[0])
                 pos_offset_list.append(docs[1])
-            return OrderedSet(self.phrase_statement(doc_list, pos_offset_list))
+            return self.phrase_statement(doc_list, pos_offset_list)
 
         if isinstance(node.value, str):
             return self.get_docs(node.value)
 
-        return OrderedSet([])
+        return set([])
 
     def query_evaluator(self, tokens: list[str]) -> list[int]:
         matched: list[int] = []
