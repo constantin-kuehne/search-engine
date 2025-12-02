@@ -23,7 +23,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    final_dir = Path("./final/")
+    final_dir = Path("./final_little/")
 
     print("Loading inverted index from disk...")
     start = time.time()
@@ -33,6 +33,8 @@ if __name__ == "__main__":
         final_dir / "term_index_file",
         final_dir / "corpus_offset_file",
         "./msmarco-docs.tsv",
+        final_dir / "index_metadata",
+        final_dir / "document_lengths"
     )
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")
@@ -61,8 +63,8 @@ if __name__ == "__main__":
             )
             print(f"We found {num_results} results matching your query.")
             print(f"{args.num_return} of them are:")
-            for result in results:
-                print(f"DocId: {result.original_docid} ({result.url}) - {result.title} - Body (50 chars): {result.body}")
+            for score, search_result in results:
+                print(f"Score: {score} - DocId: {search_result.original_docid} ({search_result.url}) - {search_result.title} - Body (50 chars): {search_result.body}")
 
             end = time.time()
             print(f"\nSearch took {end - start:.4f} seconds.")
