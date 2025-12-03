@@ -1,5 +1,5 @@
-from pathlib import Path
 import time
+from pathlib import Path
 
 import streamlit as st
 
@@ -9,13 +9,15 @@ from search_engine.inverted_index import SearchMode
 
 @st.cache_resource
 def create_index():
-    final_dir =    Path("./final/")
+    final_dir = Path("./final_little/")
     index = search_engine.InvertedIndex(
         final_dir / "doc_id_file_merged_final",
         final_dir / "position_list_file_merged_final",
         final_dir / "term_index_file",
         final_dir / "corpus_offset_file",
         "./msmarco-docs.tsv",
+        final_dir / "index_metadata",
+        final_dir / "document_lengths",
     )
     return index
 
@@ -39,7 +41,7 @@ if query:
     )
     st.write(f"{min([num_return, num_results])} of them are:")
 
-    for result in results:
+    for score, result in results:
         st.divider()
-        st.write(f"DocId: {result.original_docid} ({result.url}) - {result.title}\n")
+        st.write(f"DocId: {result.original_docid} ({result.url}) - {result.title} | Score: {score}\n")
         st.write(result.body)
