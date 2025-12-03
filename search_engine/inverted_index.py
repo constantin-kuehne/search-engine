@@ -345,7 +345,7 @@ class InvertedIndex:
                     result_term_freq = [result_term_freq]
                 if not isinstance(node.right.value, str):
                     right_result_term_freq = [right_result_term_freq]
-                result_term_freq.extend(right_result_term_freq)
+                result_term_freq.extend(right_result_term_freq) # pyright: ignore
 
                 result_doc_freq = list(left_result_doc_freq)
                 result_doc_freq.extend(right_result_doc_freq)
@@ -353,7 +353,7 @@ class InvertedIndex:
                     result_doc_freq,
                     *self.and_statement(
                         [left_result_doc_list, right_result_doc_list],
-                        result_term_freq,
+                        result_term_freq, # pyright: ignore
                     ),
                 )
             elif node.value == SearchMode.OR:
