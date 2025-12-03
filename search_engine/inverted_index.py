@@ -202,41 +202,38 @@ class InvertedIndex:
         doc_ids: Sequence[Sequence[int]],
         term_frequencies: Sequence[Sequence[int]],
     ) -> tuple[list[int], list[list[int]]]:
-        pointer = [0 for _ in range(len(doc_ids))]
+        num_terms = len(doc_ids)
+        pointers = [0] * num_terms
         result_doc_ids = []
+        result_term_freqs = []
         min_heap = []
 
         for i, doc_list in enumerate(doc_ids):
-            heapq.heappush(min_heap, (doc_list[0], i, term_frequencies[i][0]))
+            if doc_list:
+                heapq.heappush(min_heap, (doc_list[0], i))
 
-        last_min = -1
-        result_term_freqs: list[list[int]] = []
-        last_term_freqs: list[int] = []
-
+        last_doc_id = -1
+        current_tf_vector = []
         while min_heap:
-            current_min, current_index, term_frequency = heapq.heappop(min_heap)
+            doc_id, term_index = heapq.heappop(min_heap)
+            if doc_id != last_doc_id:
+                if last_doc_id != -1:
+                    result_term_freqs.append(current_tf_vector)
 
-            if current_min != last_min:
-                result_term_freqs.append(last_term_freqs)
-                result_doc_ids.append(last_min)
-                last_term_freqs = []
-            else:
-                last_term_freqs.append(term_frequency)
+                last_doc_id = doc_id
+                result_doc_ids.append(doc_id)
+                current_tf_vector = [0] * num_terms
 
-            pointer[current_index] += 1
-            if len(doc_ids[current_index]) <= pointer[current_index]:
-                break
+            tf = term_frequencies[term_index][pointers[term_index]]
+            current_tf_vector[term_index] = tf
+            pointers[term_index] += 1
 
-            heapq.heappush(
-                min_heap,
-                (
-                    doc_ids[current_index][pointer[current_index]],
-                    current_index,
-                    term_frequencies[current_index][pointer[current_index]],
-                ),
-            )
-            last_min = current_min
+            if pointers[term_index] < len(doc_ids[term_index]):
+                next_doc_id = doc_ids[term_index][pointers[term_index]]
+                heapq.heappush(min_heap, (next_doc_id, term_index))
 
+        if last_doc_id != -1:
+            result_term_freqs.append(current_tf_vector)
         return result_doc_ids, result_term_freqs
 
     def and_statement(
@@ -568,7 +565,9 @@ class InvertedIndex:
                 doc_list, pos_offset_list, term_freqs
             )
         elif mode == SearchMode.QUERY_EVALUATOR:
-            doc_freqs, matched_doc_ids, matched_term_freqs = self.query_evaluator(tokens)
+            doc_freqs, matched_doc_ids, matched_term_freqs = self.query_evaluator(
+                tokens
+            )
 
         results: list[tuple[float, SearchResult]] = []
 
