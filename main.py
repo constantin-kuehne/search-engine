@@ -1,11 +1,12 @@
 import argparse
 import os
+import readline  # noqa: F401 to enable arrow key history navigation
 import time
 from pathlib import Path
 
 import search_engine
 from search_engine.inverted_index import SearchMode
-import readline # noqa: F401 to enable arrow key history navigation 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Inverted Index Search Engine")
     parser.add_argument(
@@ -31,7 +32,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    final_dir = Path("./final_little/")
+    final_dir = Path("./final/")
 
     print("Loading inverted index from disk...")
     start = time.time()

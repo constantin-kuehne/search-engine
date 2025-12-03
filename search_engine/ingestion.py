@@ -445,8 +445,6 @@ if __name__ == "__main__":
     final_dir.mkdir(parents=True, exist_ok=True)
     staged_dir.mkdir(parents=True, exist_ok=True)
 
-
-
     # blocks_dir = Path("./blocks_little/")
     # staged_dir = Path("./staged_little/")
     # final_dir = Path("./final_little/")
