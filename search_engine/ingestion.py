@@ -432,25 +432,36 @@ def merge_blocks(
 
 
 if __name__ == "__main__":
-    # blocks_dir = Path("./blocks/")
-    # staged_dir = Path("./staged/")
-    # final_dir = Path("./final/")
+    blocks_dir = Path("./blocks/")
+    staged_dir = Path("./staged/")
+    final_dir = Path("./final/")
 
-    blocks_dir = Path("./blocks_little/")
-    staged_dir = Path("./staged_little/")
-    final_dir = Path("./final_little/")
+    blocks_dir.mkdir(parents=True, exist_ok=True)
+    (blocks_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
+    (blocks_dir / "position_list_files/").mkdir(parents=True, exist_ok=True)
+    (staged_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
+    (staged_dir / "position_list_files/").mkdir(parents=True, exist_ok=True)
+
+    final_dir.mkdir(parents=True, exist_ok=True)
+    staged_dir.mkdir(parents=True, exist_ok=True)
+
+
+
+    # blocks_dir = Path("./blocks_little/")
+    # staged_dir = Path("./staged_little/")
+    # final_dir = Path("./final_little/")
 
     index = InvertedIndexIngestion()
 
     print("Starting indexing...")
     start = time.time()
 
-    # block_size = 7_500
-    block_size = 500
+    block_size = 7_500
+    # block_size = 500
     block_num = 0
 
-    # max_rows = 3_400_000
-    max_rows = 15_001
+    max_rows = 3_400_000
+    # max_rows = 15_001
 
     num_processes = (os.cpu_count() or 6) - 2
 
