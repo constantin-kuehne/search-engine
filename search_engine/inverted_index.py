@@ -448,6 +448,9 @@ class InvertedIndex:
             # the correct AND semantic
             empty_tuple: tuple[int] = tuple([])
             return empty_tuple, empty_tuple
+    
+    def calculate_idf(self, N: int, doc_freq: int) -> float:
+        return math.log((N - doc_freq + 0.5) / (doc_freq + 0.5))
 
     def get_docs_phrase(
         self,
@@ -515,7 +518,7 @@ class InvertedIndex:
         b = 0.75
         score = 0
         for df, tf in zip(df_tokens, tf_tokens):
-            idf = math.log((N - df + 0.5) / (df + 0.5))
+            idf = self.calculate_idf(N, df)
             bracket_term = (
                 tf * (k + 1) / (tf + k * (1 - b + b * (doc_length / avg_length)))
             )
