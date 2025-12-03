@@ -578,6 +578,8 @@ class InvertedIndex:
             avg_length=self.metadata["average_doc_length"],
         )
 
+        if len(matched_term_freqs) == 1 and len(matched_doc_ids) != 1:
+            matched_term_freqs = list(zip(*matched_term_freqs))
         assert len(matched_doc_ids) == len(matched_term_freqs)
         for doc_id, term_freqs_token in zip(matched_doc_ids, matched_term_freqs):
             doc_info = self.get_doc_info(doc_id)
