@@ -341,8 +341,10 @@ class InvertedIndex:
                     self.evaluate_subtree(node.right)
                 )
                 result_term_freq = list(left_result_term_freq)
-                if len(left_result_term_freq) > 1:
+                if not isinstance(node.left.value, str):
                     result_term_freq = [result_term_freq]
+                if not isinstance(node.right.value, str):
+                    right_result_term_freq = [right_result_term_freq]
                 result_term_freq.extend(right_result_term_freq)
 
                 result_doc_freq = list(left_result_doc_freq)
@@ -385,7 +387,7 @@ class InvertedIndex:
             # phrase search
             tokens = node.value
             doc_list_phrase: list[tuple[int]] = []
-            pos_offset_list: list[tuple[int]] = []
+            pos_offset_list_phrase: list[tuple[int]] = []
             term_freqs_phrase: list[tuple[int]] = []
             doc_freqs_phrase: list[int] = []
             for token in tokens:
@@ -393,13 +395,13 @@ class InvertedIndex:
                     self.get_docs_phrase(token)
                 )
                 doc_list_phrase.append(doc_list_per_token)
-                pos_offset_list.append(pos_offset_list_per_token)
+                pos_offset_list_phrase.append(pos_offset_list_per_token)
                 term_freqs_phrase.append(term_freq_per_token)
                 doc_freqs_phrase.append(len(doc_list_per_token))
             return (
                 doc_freqs_phrase,
                 *self.phrase_statement(
-                    doc_list_phrase, pos_offset_list, term_freqs_phrase
+                    doc_list_phrase, pos_offset_list_phrase, term_freqs_phrase
                 ),
             )
 
