@@ -95,50 +95,46 @@ class InvertedIndex:
         doc_ids: Sequence[Sequence[int]],
         term_frequencies: Sequence[Sequence[int]],
     ) -> tuple[list[int], list[list[int]]]:
-        num_terms = len(doc_ids)
-        if num_terms == 0:
-            return [], []
-        pointers = [0] * num_terms
+        pointer = [0 for _ in range(len(doc_ids))]
         result_doc_ids = []
-        result_term_freqs = []
         min_heap = []
 
         for i, doc_list in enumerate(doc_ids):
-            if not doc_list:
-                return [], []
-            heapq.heappush(min_heap, (doc_list[0], i))
-        last_doc_id = -1
+            heapq.heappush(min_heap, (doc_list[0], i, term_frequencies[i][0]))
 
-        current_doc_data = []
+        counter_same_value = 0
+        last_min = -1
+        result_term_freqs: list[list[int]] = []
+        last_term_freqs: list[int] = []
+
         while min_heap:
-            doc_id, term_index = heapq.heappop(min_heap)
-            if doc_id != last_doc_id:
-                if last_doc_id != -1 and len(current_doc_data) == num_terms:
-                    result_doc_ids.append(last_doc_id)
+            current_min, current_index, term_frequency = heapq.heappop(min_heap)
 
-                    tf_vector = [0] * num_terms
-                    for t_idx, tf in current_doc_data:
-                        tf_vector[t_idx] = tf
-                    result_term_freqs.append(tf_vector)
+            if last_min == current_min:
+                counter_same_value += 1
+            else:
+                last_term_freqs = []
+                counter_same_value = 0
 
-                last_doc_id = doc_id
-                current_doc_data = []
+            last_term_freqs.append(term_frequency)
+            if counter_same_value == len(doc_ids) - 1:
+                result_term_freqs.append(last_term_freqs)
+                result_doc_ids.append(current_min)
 
-            tf = term_frequencies[term_index][pointers[term_index]]
-            current_doc_data.append((term_index, tf))
+            pointer[current_index] += 1
+            if len(doc_ids[current_index]) <= pointer[current_index]:
+                last_min = current_min
+                continue
 
-            pointers[term_index] += 1
-
-            if pointers[term_index] < len(doc_ids[term_index]):
-                next_doc_id = doc_ids[term_index][pointers[term_index]]
-                heapq.heappush(min_heap, (next_doc_id, term_index))
-
-        if last_doc_id != -1 and len(current_doc_data) == num_terms:
-            result_doc_ids.append(last_doc_id)
-            tf_vector = [0] * num_terms
-            for t_idx, tf in current_doc_data:
-                tf_vector[t_idx] = tf
-            result_term_freqs.append(tf_vector)
+            heapq.heappush(
+                min_heap,
+                (
+                    doc_ids[current_index][pointer[current_index]],
+                    current_index,
+                    term_frequencies[current_index][pointer[current_index]],
+                ),
+            )
+            last_min = current_min
         return result_doc_ids, result_term_freqs
 
     def intersection_phrase(
@@ -339,13 +335,15 @@ class InvertedIndex:
     ) -> tuple[list[int], Sequence[int], Sequence[Sequence[int]]]:
         if isinstance(node.value, SearchMode):
             if node.value == SearchMode.AND:
-                left_result_doc_freq, left_result_doc_list, result_term_freq = (
+                left_result_doc_freq, left_result_doc_list, left_result_term_freq = (
                     self.evaluate_subtree(node.left)
                 )
                 right_result_doc_freq, right_result_doc_list, right_result_term_freq = (
                     self.evaluate_subtree(node.right)
                 )
-                result_term_freq = list(result_term_freq)
+                result_term_freq = list(left_result_term_freq)
+                if len(left_result_term_freq) > 1:
+                    result_term_freq = [result_term_freq]
                 result_term_freq.extend(right_result_term_freq)
 
                 result_doc_freq = list(left_result_doc_freq)
@@ -358,13 +356,13 @@ class InvertedIndex:
                     ),
                 )
             elif node.value == SearchMode.OR:
-                left_result_doc_freq, left_result_doc_list, result_term_freq = (
+                left_result_doc_freq, left_result_doc_list, left_result_term_freq = (
                     self.evaluate_subtree(node.left)
                 )
                 right_result_doc_freq, right_result_doc_list, right_result_term_freq = (
                     self.evaluate_subtree(node.right)
                 )
-                result_term_freq = list(result_term_freq)
+                result_term_freq = list(left_result_term_freq)
                 result_term_freq.extend(right_result_term_freq)
 
                 result_doc_freq = list(left_result_doc_freq)
@@ -586,10 +584,21 @@ class InvertedIndex:
             avg_length=self.metadata["average_doc_length"],
         )
 
+        def flatten(items: Sequence[Sequence[int] | int]) -> list[int]:
+            flat_list: list[int] = []
+            for item in items:
+                if isinstance(item, int):
+                    flat_list.append(item)
+                else:
+                    flattened_sublist = flatten(item)
+                    flat_list.extend(flattened_sublist)
+            return flat_list
+
         if len(matched_term_freqs) == 1 and len(matched_doc_ids) != 1:
             matched_term_freqs = list(zip(*matched_term_freqs))
         assert len(matched_doc_ids) == len(matched_term_freqs)
         for doc_id, term_freqs_token in zip(matched_doc_ids, matched_term_freqs):
+            term_freqs_token = flatten(term_freqs_token)
             doc_info = self.get_doc_info(doc_id)
 
             doc_length = self.document_lengths[doc_id]
