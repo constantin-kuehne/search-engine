@@ -341,9 +341,9 @@ class InvertedIndex:
                     self.evaluate_subtree(node.right)
                 )
                 result_term_freq = list(left_result_term_freq)
-                if not isinstance(node.left.value, str):
+                if not isinstance(node.left.value, str) and not node.left.value == SearchMode.NOT:
                     result_term_freq = [result_term_freq]
-                if not isinstance(node.right.value, str):
+                if not isinstance(node.right.value, str) and not node.right.value == SearchMode.NOT:
                     right_result_term_freq = [right_result_term_freq]
                 result_term_freq.extend(right_result_term_freq) # pyright: ignore
 
