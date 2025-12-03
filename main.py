@@ -5,7 +5,7 @@ from pathlib import Path
 
 import search_engine
 from search_engine.inverted_index import SearchMode
-
+import readline # noqa: F401 to enable arrow key history navigation 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Simple Inverted Index Search Engine")
     parser.add_argument(
