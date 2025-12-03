@@ -329,38 +329,55 @@ class InvertedIndex:
 
         return (matched, term_freqs_per_doc_matched)
 
-    def evaluate_subtree(self, node) -> tuple[Sequence[int], Sequence[Sequence[int]]]:
+    def evaluate_subtree(
+        self, node
+    ) -> tuple[list[int], Sequence[int], Sequence[Sequence[int]]]:
         if isinstance(node.value, SearchMode):
             if node.value == SearchMode.AND:
-                left_result_doc_list, result_term_freq = self.evaluate_subtree(
-                    node.left
+                left_result_doc_freq, left_result_doc_list, result_term_freq = (
+                    self.evaluate_subtree(node.left)
                 )
-                right_result_doc_list, right_result_term_freq = self.evaluate_subtree(
-                    node.right
+                right_result_doc_freq, right_result_doc_list, right_result_term_freq = (
+                    self.evaluate_subtree(node.right)
                 )
                 result_term_freq = list(result_term_freq)
                 result_term_freq.extend(right_result_term_freq)
-                return self.and_statement(
-                    [left_result_doc_list, right_result_doc_list],
-                    result_term_freq,
+
+                result_doc_freq = list(left_result_doc_freq)
+                result_doc_freq.extend(right_result_doc_freq)
+                return (
+                    result_doc_freq,
+                    *self.and_statement(
+                        [left_result_doc_list, right_result_doc_list],
+                        result_term_freq,
+                    ),
                 )
             elif node.value == SearchMode.OR:
-                left_result_doc_list, result_term_freq = self.evaluate_subtree(
-                    node.left
+                left_result_doc_freq, left_result_doc_list, result_term_freq = (
+                    self.evaluate_subtree(node.left)
                 )
-                right_result_doc_list, right_result_term_freq = self.evaluate_subtree(
-                    node.right
+                right_result_doc_freq, right_result_doc_list, right_result_term_freq = (
+                    self.evaluate_subtree(node.right)
                 )
                 result_term_freq = list(result_term_freq)
                 result_term_freq.extend(right_result_term_freq)
-                return self.or_statement(
-                    [left_result_doc_list, right_result_doc_list], result_term_freq
+
+                result_doc_freq = list(left_result_doc_freq)
+                result_doc_freq.extend(right_result_doc_freq)
+                return (
+                    result_doc_freq,
+                    *self.or_statement(
+                        [left_result_doc_list, right_result_doc_list], result_term_freq
+                    ),
                 )
             elif node.value == SearchMode.NOT:
-                left_result_doc_list, result_term_freq = self.evaluate_subtree(
-                    node.left
+                left_result_doc_freq, left_result_doc_list, result_term_freq = (
+                    self.evaluate_subtree(node.left)
                 )
-                return self.not_statement([left_result_doc_list])
+                return (
+                    left_result_doc_freq,
+                    *self.not_statement([left_result_doc_list]),
+                )
 
         if isinstance(node.value, list):
             # phrase search
@@ -368,30 +385,35 @@ class InvertedIndex:
             doc_list_phrase: list[tuple[int]] = []
             pos_offset_list: list[tuple[int]] = []
             term_freqs_phrase: list[tuple[int]] = []
+            doc_freqs_phrase: list[int] = []
             for token in tokens:
-                doc_list_token, pos_offset_list_token, term_freq_token = (
+                doc_list_per_token, pos_offset_list_per_token, term_freq_per_token = (
                     self.get_docs_phrase(token)
                 )
-                doc_list_phrase.append(doc_list_token)
-                pos_offset_list.append(pos_offset_list_token)
-                term_freqs_phrase.append(term_freq_token)
-            return self.phrase_statement(
-                doc_list_phrase, pos_offset_list, term_freqs_phrase
+                doc_list_phrase.append(doc_list_per_token)
+                pos_offset_list.append(pos_offset_list_per_token)
+                term_freqs_phrase.append(term_freq_per_token)
+                doc_freqs_phrase.append(len(doc_list_per_token))
+            return (
+                doc_freqs_phrase,
+                *self.phrase_statement(
+                    doc_list_phrase, pos_offset_list, term_freqs_phrase
+                ),
             )
 
         if isinstance(node.value, str):
             doc_list, term_frequencies = self.get_docs(node.value)
-            return list(doc_list), [list(term_frequencies)]
+            return [len(doc_list)], doc_list, [list(term_frequencies)]
 
         return tuple([])
 
     def query_evaluator(
         self, tokens: list[str]
-    ) -> tuple[Sequence[int], Sequence[Sequence[int]]]:
+    ) -> tuple[list[int], Sequence[int], Sequence[Sequence[int]]]:
         output_queue = shunting_yard(tokens)
         root = build_query_tree(output_queue)
-        matched_doc_ids, matched_doc_freqs = self.evaluate_subtree(root)
-        return matched_doc_ids, matched_doc_freqs
+        doc_freqs, matched_doc_ids, matched_doc_freqs = self.evaluate_subtree(root)
+        return doc_freqs, matched_doc_ids, matched_doc_freqs
 
     def get_docs(
         self,
@@ -509,40 +531,44 @@ class InvertedIndex:
             case SearchMode.PHRASE:
                 pos_offset_list: list[tuple[int]] = []
                 for token in tokens:
-                    doc_list_token, pos_offset_list_token, term_freq_token = (
-                        self.get_docs_phrase(token)
-                    )
-                    doc_list.append(doc_list_token)
-                    pos_offset_list.append(pos_offset_list_token)
-                    term_freqs.append(term_freq_token)
+                    (
+                        doc_list_per_token,
+                        pos_offset_list_per_token,
+                        term_freq_per_token,
+                    ) = self.get_docs_phrase(token)
+                    doc_list.append(doc_list_per_token)
+                    pos_offset_list.append(pos_offset_list_per_token)
+                    term_freqs.append(term_freq_per_token)
+                    doc_freqs.append(len(doc_list_per_token))
             case SearchMode.AND | SearchMode.OR | SearchMode.NOT:
                 for token in tokens:
-                    doc_list_token, term_freq_token = self.get_docs(token)
-                    doc_list.append(doc_list_token)
-                    term_freqs.append(term_freq_token)
-                    doc_freqs.append(len(doc_list_token))
-
+                    doc_list_per_token, term_freq_per_token = self.get_docs(token)
+                    doc_list.append(doc_list_per_token)
+                    term_freqs.append(term_freq_per_token)
+                    doc_freqs.append(len(doc_list_per_token))
             case SearchMode.QUERY_EVALUATOR:
                 pass
             case _:
                 raise ValueError(f"Unsupported search mode: {mode}")
 
         matched_doc_ids: Sequence[int] = []
-        matched_doc_freqs: Sequence[Sequence[int]] = []
+        matched_term_freqs: Sequence[Sequence[int]] = []
         if mode == SearchMode.AND:
-            matched_doc_ids, matched_doc_freqs = self.and_statement(
+            matched_doc_ids, matched_term_freqs = self.and_statement(
                 doc_list, term_freqs
             )
         elif mode == SearchMode.OR:
-            matched_doc_ids, matched_doc_freqs = self.or_statement(doc_list, term_freqs)
+            matched_doc_ids, matched_term_freqs = self.or_statement(
+                doc_list, term_freqs
+            )
         elif mode == SearchMode.NOT:
-            matched_doc_ids, matched_doc_freqs = self.not_statement(doc_list)
+            matched_doc_ids, matched_term_freqs = self.not_statement(doc_list)
         elif mode == SearchMode.PHRASE:
-            matched_doc_ids, matched_doc_freqs = self.phrase_statement(
+            matched_doc_ids, matched_term_freqs = self.phrase_statement(
                 doc_list, pos_offset_list, term_freqs
             )
         elif mode == SearchMode.QUERY_EVALUATOR:
-            matched_doc_ids, matched_doc_freqs = self.query_evaluator(tokens)
+            doc_freqs, matched_doc_ids, matched_term_freqs = self.query_evaluator(tokens)
 
         results: list[tuple[float, SearchResult]] = []
 
@@ -553,8 +579,8 @@ class InvertedIndex:
             avg_length=self.metadata["average_doc_length"],
         )
 
-        assert len(matched_doc_ids) == len(matched_doc_freqs)
-        for doc_id, term_freqs_token in zip(matched_doc_ids, matched_doc_freqs):
+        assert len(matched_doc_ids) == len(matched_term_freqs)
+        for doc_id, term_freqs_token in zip(matched_doc_ids, matched_term_freqs):
             doc_info = self.get_doc_info(doc_id)
 
             doc_length = self.document_lengths[doc_id]
