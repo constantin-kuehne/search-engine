@@ -95,45 +95,50 @@ class InvertedIndex:
         doc_ids: Sequence[Sequence[int]],
         term_frequencies: Sequence[Sequence[int]],
     ) -> tuple[list[int], list[list[int]]]:
-        pointer = [0 for _ in range(len(doc_ids))]
+        num_terms = len(doc_ids)
+        if num_terms == 0:
+            return [], []
+        pointers = [0] * num_terms
         result_doc_ids = []
+        result_term_freqs = []
         min_heap = []
 
         for i, doc_list in enumerate(doc_ids):
-            heapq.heappush(min_heap, (doc_list[0], i, term_frequencies[i][0]))
+            if not doc_list:
+                return [], []
+            heapq.heappush(min_heap, (doc_list[0], i))
+        last_doc_id = -1
 
-        counter_same_value = 0
-        last_min = -1
-        result_term_freqs: list[list[int]] = []
-        last_term_freqs: list[int] = []
-
+        current_doc_data = []
         while min_heap:
-            current_min, current_index, term_frequency = heapq.heappop(min_heap)
+            doc_id, term_index = heapq.heappop(min_heap)
+            if doc_id != last_doc_id:
+                if last_doc_id != -1 and len(current_doc_data) == num_terms:
+                    result_doc_ids.append(last_doc_id)
 
-            if last_min == current_min:
-                counter_same_value += 1
-                last_term_freqs.append(term_frequency)
-            else:
-                last_term_freqs = []
-                counter_same_value = 0
+                    tf_vector = [0] * num_terms
+                    for t_idx, tf in current_doc_data:
+                        tf_vector[t_idx] = tf
+                    result_term_freqs.append(tf_vector)
 
-            if counter_same_value == len(doc_ids) - 1:
-                result_term_freqs.append(last_term_freqs)
-                result_doc_ids.append(current_min)
+                last_doc_id = doc_id
+                current_doc_data = []
 
-            pointer[current_index] += 1
-            if len(doc_ids[current_index]) <= pointer[current_index]:
-                break
+            tf = term_frequencies[term_index][pointers[term_index]]
+            current_doc_data.append((term_index, tf))
 
-            heapq.heappush(
-                min_heap,
-                (
-                    doc_ids[current_index][pointer[current_index]],
-                    current_index,
-                    term_frequencies[current_index][pointer[current_index]],
-                ),
-            )
-            last_min = current_min
+            pointers[term_index] += 1
+
+            if pointers[term_index] < len(doc_ids[term_index]):
+                next_doc_id = doc_ids[term_index][pointers[term_index]]
+                heapq.heappush(min_heap, (next_doc_id, term_index))
+
+        if last_doc_id != -1 and len(current_doc_data) == num_terms:
+            result_doc_ids.append(last_doc_id)
+            tf_vector = [0] * num_terms
+            for t_idx, tf in current_doc_data:
+                tf_vector[t_idx] = tf
+            result_term_freqs.append(tf_vector)
         return result_doc_ids, result_term_freqs
 
     def intersection_phrase(
@@ -141,61 +146,64 @@ class InvertedIndex:
         doc_ids_per_token: list[tuple[int, ...]],
         doc_pos_per_token: list[tuple[int, ...]],
         term_frequencies: Sequence[Sequence[int]],
-    ) -> tuple[list[int], list[list[int]], Sequence[Sequence[int]]]:
-        pointer = [0 for _ in range(len(doc_ids_per_token))]
-        result_doc_ids: list[int] = []
+    ) -> tuple[list[int], list[list[int]], list[list[int]]]:
+        num_terms = len(doc_ids_per_token)
+        if num_terms == 0:
+            return [], [], []
+        pointers = [0] * num_terms
+        result_doc_ids = []
+        result_term_freqs = []
+        result_pos_offsets = []
         min_heap = []
-
+        
         for i, doc_list in enumerate(doc_ids_per_token):
-            heapq.heappush(
-                min_heap,
-                (doc_list[0], i, term_frequencies[i][0], doc_pos_per_token[i][0]),
-            )
-
-        counter_same_value = 0
-        last_min = -1
-
-        result_term_freqs: list[list[int]] = []
-        last_term_freqs: list[int] = []
-
-        result_doc_pos_offsets: list[list[int]] = []
-        last_doc_pos_offsets: list[int] = []
-
+            if not doc_list:
+                return [], [], []
+            
+            heapq.heappush(min_heap, (doc_list[0], i))
+        last_doc_id = -1
+        
+        current_doc_data = []
         while min_heap:
-            current_min, current_index, term_frequency, doc_pos_offset = heapq.heappop(
-                min_heap
-            )
-
-            if last_min == current_min:
-                counter_same_value += 1
-                last_term_freqs.append(term_frequency)
-                last_doc_pos_offsets.append(doc_pos_offset)
-            else:
-                last_term_freqs = []
-                last_doc_pos_offsets = []
-                counter_same_value = 0
-
-            if counter_same_value == len(doc_ids_per_token) - 1:
-                result_term_freqs.append(last_term_freqs)
-                result_doc_pos_offsets.append(last_doc_pos_offsets)
-                result_doc_ids.append(current_min)
-
-            pointer[current_index] += 1
-            if len(doc_ids_per_token[current_index]) <= pointer[current_index]:
-                break
-
-            heapq.heappush(
-                min_heap,
-                (
-                    doc_ids_per_token[current_index][pointer[current_index]],
-                    current_index,
-                    term_frequencies[current_index][pointer[current_index]],
-                    doc_pos_per_token[current_index][pointer[current_index]],
-                ),
-            )
-            last_min = current_min
-
-        return result_doc_ids, result_term_freqs, result_doc_pos_offsets
+            doc_id, term_index = heapq.heappop(min_heap)
+            if doc_id != last_doc_id:
+                
+                if last_doc_id != -1 and len(current_doc_data) == num_terms:
+                    
+                    result_doc_ids.append(last_doc_id)
+                    
+                    tf_vector = [0] * num_terms
+                    pos_offset_vector = [0] * num_terms
+                    for t_idx, tf, pos_offset in current_doc_data:
+                        tf_vector[t_idx] = tf
+                        pos_offset_vector[t_idx] = pos_offset
+                    result_term_freqs.append(tf_vector)
+                    result_pos_offsets.append(pos_offset_vector)
+                
+                last_doc_id = doc_id
+                current_doc_data = []
+            
+            tf = term_frequencies[term_index][pointers[term_index]]
+            pos_offset = doc_pos_per_token[term_index][pointers[term_index]]
+            current_doc_data.append((term_index, tf, pos_offset))
+            
+            pointers[term_index] += 1
+            
+            
+            if pointers[term_index] < len(doc_ids_per_token[term_index]):
+                next_doc_id = doc_ids_per_token[term_index][pointers[term_index]]
+                heapq.heappush(min_heap, (next_doc_id, term_index))
+        
+        if last_doc_id != -1 and len(current_doc_data) == num_terms:
+            result_doc_ids.append(last_doc_id)
+            tf_vector = [0] * num_terms
+            pos_offset_vector = [0] * num_terms
+            for t_idx, tf, pos_offset in current_doc_data:
+                tf_vector[t_idx] = tf
+                pos_offset_vector[t_idx] = pos_offset
+            result_term_freqs.append(tf_vector)
+            result_pos_offsets.append(pos_offset_vector)
+        return result_doc_ids, result_term_freqs, result_pos_offsets
 
     def union(
         self,
