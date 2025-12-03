@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -21,6 +22,13 @@ if __name__ == "__main__":
         default=10,
         help="How many search results should be returned",
     )
+    parser.add_argument(
+        "--length_body",
+        type=int,
+        default=100,
+        help="Number of characters to show in the body snippet of each search result",
+    )
+
     args = parser.parse_args()
 
     final_dir = Path("./final_little/")
@@ -34,7 +42,7 @@ if __name__ == "__main__":
         final_dir / "corpus_offset_file",
         "./msmarco-docs.tsv",
         final_dir / "index_metadata",
-        final_dir / "document_lengths"
+        final_dir / "document_lengths",
     )
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")
@@ -59,12 +67,21 @@ if __name__ == "__main__":
             start = time.time()
 
             num_results, results = index.search(
-                query, mode=args.mode, num_return=args.num_return
+                query,
+                mode=args.mode,
+                num_return=args.num_return,
+                length_body=args.length_body,
             )
             print(f"We found {num_results} results matching your query.")
-            print(f"{args.num_return} of them are:")
+            print(f"{min(args.num_return, num_results)} of them are:")
+
+            size = os.get_terminal_size()
             for score, search_result in results:
-                print(f"Score: {score} - DocId: {search_result.original_docid} ({search_result.url}) - {search_result.title} - Body (50 chars): {search_result.body}")
+                print("-" * size.columns)
+                print(
+                    f"Score: {score} - DocId: {search_result.original_docid} ({search_result.url}) - {search_result.title} - "
+                )
+                print(f"Body ({args.length_body} chars): {search_result.body}")
 
             end = time.time()
             print(f"\nSearch took {end - start:.4f} seconds.")
