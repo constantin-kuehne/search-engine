@@ -95,6 +95,7 @@ class InvertedIndex:
         doc_ids: Sequence[Sequence[int]],
         term_frequencies: Sequence[Sequence[int]],
     ) -> tuple[list[int], list[list[int]]]:
+        doc_ids = [doc_list for doc_list in doc_ids if len(doc_list) > 0]
         pointer = [0 for _ in range(len(doc_ids))]
         result_doc_ids = []
         min_heap = []
@@ -422,12 +423,17 @@ class InvertedIndex:
     def get_docs(
         self,
         token: str,
+        idf_threshold: float = 1.5,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         res: Optional[int] = self.index_2.get(token, None)
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
             res += INT_SIZE + length_term  # move to the document list
             length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
+            if self.calculate_idf(self.metadata["num_docs"], length_doc_list) < idf_threshold:
+                empty_tuple: tuple[int] = tuple([])
+                return empty_tuple, empty_tuple
+
             doc_list = struct.unpack(
                 f"{length_doc_list}I",
                 self.mm_doc_id_list[
