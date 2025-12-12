@@ -45,7 +45,7 @@ class InvertedIndexIngestion:
         file_path_doc_id.parent.mkdir(parents=True, exist_ok=True)
         file_path_position_list.parent.mkdir(parents=True, exist_ok=True)
 
-        doc_id_file = open(file_path_doc_id, "w+b")
+        doc_id_file = open(file_path_doc_id, "wb")
         position_list_file = open(file_path_position_list, mode="wb")
 
         for term, (doc_list, position_list_list) in sorted(self.index.items()):
@@ -169,7 +169,7 @@ class InvertedIndexIngestion:
         Path(file_path_doc_id_merged).parent.mkdir(parents=True, exist_ok=True)
         Path(file_path_position_list_merged).parent.mkdir(parents=True, exist_ok=True)
 
-        doc_id_file = open(file_path_doc_id_merged, "w+b")
+        doc_id_file = open(file_path_doc_id_merged, "wb")
         position_list_file = open(file_path_position_list_merged, "wb")
 
         file_handles: list[BufferedReader] = []
@@ -439,11 +439,12 @@ if __name__ == "__main__":
     blocks_dir.mkdir(parents=True, exist_ok=True)
     (blocks_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
     (blocks_dir / "position_list_files/").mkdir(parents=True, exist_ok=True)
+
+    staged_dir.mkdir(parents=True, exist_ok=True)
     (staged_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
     (staged_dir / "position_list_files/").mkdir(parents=True, exist_ok=True)
 
     final_dir.mkdir(parents=True, exist_ok=True)
-    staged_dir.mkdir(parents=True, exist_ok=True)
 
     # blocks_dir = Path("./blocks_little/")
     # staged_dir = Path("./staged_little/")
@@ -455,11 +456,9 @@ if __name__ == "__main__":
     start = time.time()
 
     block_size = 7_500
-    # block_size = 500
     block_num = 0
 
-    max_rows = 3_400_000
-    # max_rows = 15_001
+    max_rows = None
 
     num_processes = (os.cpu_count() or 6) - 2
 

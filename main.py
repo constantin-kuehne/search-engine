@@ -1,8 +1,8 @@
 import argparse
-import os
-import readline  # noqa: F401 to enable arrow key history navigation
 import time
 from pathlib import Path
+from shutil import get_terminal_size
+import readline  # noqa: F401 to enable arrow key history navigation
 
 import search_engine
 from search_engine.inverted_index import SearchMode
@@ -48,19 +48,6 @@ if __name__ == "__main__":
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")
 
-    # print("Starting indexing...")
-    # start = time.time()
-
-    # for row in search_engine.ingestion.process_data(
-    #     "./msmarco-docs.tsv", max_rows=1_000
-    # ):
-    #     index.add_document(
-    #         row.docid, row.original_docid, row.url, row.title, row.tokens
-    #     )
-
-    # end = time.time()
-    # print(f"Indexing complete. Took {end - start:.4f}s\n")
-
     try:
         while True:
             query = input("Enter your search query: ")
@@ -76,9 +63,9 @@ if __name__ == "__main__":
             print(f"We found {num_results} results matching your query.")
             print(f"{min(args.num_return, num_results)} of them are:")
 
-            size = os.get_terminal_size()
+            num_terminal_columns = get_terminal_size().columns
             for score, search_result in results:
-                print("-" * size.columns)
+                print("-" * num_terminal_columns)
                 print(
                     f"Score: {score} - DocId: {search_result.original_docid} ({search_result.url}) - {search_result.title} - "
                 )
@@ -87,4 +74,4 @@ if __name__ == "__main__":
             end = time.time()
             print(f"\nSearch took {end - start:.4f} seconds.")
     except KeyboardInterrupt:
-        print("\nprogram terminated")
+        print("\nProgram terminated.")
