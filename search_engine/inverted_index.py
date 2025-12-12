@@ -10,10 +10,15 @@ from typing import Optional, Sequence
 
 from ordered_set import OrderedSet
 
-from search_engine.preprocessing import (build_query_tree, shunting_yard,
-                                         tokenize_text)
-from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode,
-                                 SearchResult, get_length_from_bytes)
+from search_engine.preprocessing import build_query_tree, shunting_yard, tokenize_text
+from search_engine.utils import (
+    INT_SIZE,
+    LONG_SIZE,
+    DocumentInfo,
+    SearchMode,
+    SearchResult,
+    get_length_from_bytes,
+)
 
 
 class InvertedIndex:
@@ -108,12 +113,16 @@ class InvertedIndex:
         result_term_freqs: list[list[int]] = []
         last_term_freqs: list[int] = []
 
+        one_list_finished = False
+
         while min_heap:
             current_min, current_index, term_frequency = heapq.heappop(min_heap)
 
             if last_min == current_min:
                 counter_same_value += 1
             else:
+                if one_list_finished:
+                    break
                 last_term_freqs = []
                 counter_same_value = 0
 
@@ -122,9 +131,11 @@ class InvertedIndex:
                 result_term_freqs.append(last_term_freqs)
                 result_doc_ids.append(current_min)
 
+
             pointer[current_index] += 1
             if len(doc_ids[current_index]) <= pointer[current_index]:
                 last_min = current_min
+                one_list_finished = True
                 continue
 
             heapq.heappush(

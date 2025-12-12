@@ -541,26 +541,16 @@ if __name__ == "__main__":
         )
 
     num_files = len(os.listdir(staged_dir / "doc_id_files/"))
-    if num_files >= 2:
-        index.merge_blocks(
-            final_dir / "doc_id_file_merged_final",
-            staged_dir / "doc_id_files/",
-            "doc_id_file_merged_",
-            final_dir / "position_list_file_merged_final",
-            staged_dir / "position_list_files/",
-            "position_list_file_merged_",
-            0,
-            num_files,
-        )
-    else:
-        os.rename(
-            staged_dir / "doc_id_files/doc_id_file_merged_0",
-            final_dir / "doc_id_file_merged_final",
-        )
-        os.rename(
-            staged_dir / "position_list_files/position_list_file_merged_0",
-            final_dir / "position_list_file_merged_final",
-        )
+    index.merge_blocks(
+        final_dir / "doc_id_file_merged_final",
+        staged_dir / "doc_id_files/",
+        "doc_id_file_merged_",
+        final_dir / "position_list_file_merged_final",
+        staged_dir / "position_list_files/",
+        "position_list_file_merged_",
+        0,
+        num_files,
+    )
 
     print(f"Finished merging blocks in {time.time() - start_merge:.4f}s")
 
