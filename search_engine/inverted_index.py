@@ -10,15 +10,10 @@ from typing import Optional, Sequence
 
 from ordered_set import OrderedSet
 
-from search_engine.preprocessing import build_query_tree, shunting_yard, tokenize_text
-from search_engine.utils import (
-    INT_SIZE,
-    LONG_SIZE,
-    DocumentInfo,
-    SearchMode,
-    SearchResult,
-    get_length_from_bytes,
-)
+from search_engine.preprocessing import (build_query_tree, shunting_yard,
+                                         tokenize_text)
+from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode,
+                                 SearchResult, get_length_from_bytes)
 
 
 class InvertedIndex:
@@ -27,19 +22,18 @@ class InvertedIndex:
         file_path_doc_id: str | Path,
         file_path_position_list: str | Path,
         file_path_term_index: str | Path,
-        file_path_corpus_offset: str | Path,
-        file_path_corpus: str | Path,
+        file_path_doc_info_offset: str | Path,
+        file_path_doc_info: str | Path,
         file_path_metadata: str | Path,
         file_path_document_lengths: str | Path,
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
         term_index_file = open(file_path_term_index, "rb")
         position_list_file = open(file_path_position_list, mode="rb")
-        # position_index_file = open(file_path_position_index, mode="rb")
 
-        corpus_file = open(file_path_corpus, "rb")
+        doc_info_file = open(file_path_doc_info, "rb")
 
-        self.index_2 = pickle.load(term_index_file)  # TODO: Set to self.index
+        self.index = pickle.load(term_index_file)  # TODO: Set to self.index
 
         self.mm_doc_id_list = mmap.mmap(
             doc_id_file.fileno(), length=0, prot=mmap.PROT_READ
@@ -49,12 +43,12 @@ class InvertedIndex:
             position_list_file.fileno(), length=0, prot=mmap.PROT_READ
         )
 
-        self.mm_corpus = mmap.mmap(corpus_file.fileno(), length=0, prot=mmap.PROT_READ)
+        self.mm_doc_info = mmap.mmap(doc_info_file.fileno(), length=0, prot=mmap.PROT_READ)
 
-        corpus_offset_file = open(file_path_corpus_offset, "rb")
-        self.docs: dict[int, int] = pickle.load(corpus_offset_file)
+        doc_info_offset_file = open(file_path_doc_info_offset, "rb")
+        self.docs: dict[int, int] = pickle.load(doc_info_offset_file)
 
-        corpus_offset_file.close()
+        doc_info_offset_file.close()
 
         term_index_file.close()
 
@@ -130,7 +124,6 @@ class InvertedIndex:
             if counter_same_value == len(doc_ids) - 1:
                 result_term_freqs.append(last_term_freqs)
                 result_doc_ids.append(current_min)
-
 
             pointer[current_index] += 1
             if len(doc_ids[current_index]) <= pointer[current_index]:
@@ -353,11 +346,17 @@ class InvertedIndex:
                     self.evaluate_subtree(node.right)
                 )
                 result_term_freq = list(left_result_term_freq)
-                if not isinstance(node.left.value, str) and not node.left.value == SearchMode.NOT:
+                if (
+                    not isinstance(node.left.value, str)
+                    and not node.left.value == SearchMode.NOT
+                ):
                     result_term_freq = [result_term_freq]
-                if not isinstance(node.right.value, str) and not node.right.value == SearchMode.NOT:
+                if (
+                    not isinstance(node.right.value, str)
+                    and not node.right.value == SearchMode.NOT
+                ):
                     right_result_term_freq = [right_result_term_freq]
-                result_term_freq.extend(right_result_term_freq) # pyright: ignore
+                result_term_freq.extend(right_result_term_freq)  # pyright: ignore
 
                 result_doc_freq = list(left_result_doc_freq)
                 result_doc_freq.extend(right_result_doc_freq)
@@ -365,7 +364,7 @@ class InvertedIndex:
                     result_doc_freq,
                     *self.and_statement(
                         [left_result_doc_list, right_result_doc_list],
-                        result_term_freq, # pyright: ignore
+                        result_term_freq,  # pyright: ignore
                     ),
                 )
             elif node.value == SearchMode.OR:
@@ -436,12 +435,15 @@ class InvertedIndex:
         token: str,
         idf_threshold: float = 1.5,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
-        res: Optional[int] = self.index_2.get(token, None)
+        res: Optional[int] = self.index.get(token, None)
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
             res += INT_SIZE + length_term  # move to the document list
             length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
-            if self.calculate_idf(self.metadata["num_docs"], length_doc_list) < idf_threshold:
+            if (
+                self.calculate_idf(self.metadata["num_docs"], length_doc_list)
+                < idf_threshold
+            ):
                 empty_tuple: tuple[int] = tuple([])
                 return empty_tuple, empty_tuple
 
@@ -465,7 +467,7 @@ class InvertedIndex:
             # the correct AND semantic
             empty_tuple: tuple[int] = tuple([])
             return empty_tuple, empty_tuple
-    
+
     def calculate_idf(self, N: int, doc_freq: int) -> float:
         return math.log((N - doc_freq + 0.5) / (doc_freq + 0.5))
 
@@ -473,7 +475,7 @@ class InvertedIndex:
         self,
         token: str,
     ) -> tuple[tuple[int], tuple[int], tuple[int]]:
-        res: Optional[int] = self.index_2.get(token, None)
+        res: Optional[int] = self.index.get(token, None)
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
             res += INT_SIZE + length_term  # move to the document list
@@ -513,14 +515,13 @@ class InvertedIndex:
 
     def get_doc_info(self, doc_id: int) -> DocumentInfo:
         offset = self.docs[doc_id]
-        next_offset = self.docs.get(doc_id + 1, self.mm_corpus.size())
-        line = self.mm_corpus[offset:next_offset].decode("utf-8")
+        next_offset = self.docs.get(doc_id + 1, self.mm_doc_info.size())
+        line = self.mm_doc_info[offset:next_offset].decode("utf-8")
         row = next(self.reader([line]))
         return DocumentInfo(
             original_docid=row["docid"],
             url=row["url"],
             title=row["title"],
-            body=row["body"],
         )
 
     def bm25_score(
@@ -544,7 +545,7 @@ class InvertedIndex:
         return score
 
     def search(
-        self, query: str, mode: SearchMode, num_return: int = 10, length_body: int = 50
+        self, query: str, mode: SearchMode, num_return: int = 10
     ) -> tuple[int, list[tuple[float, SearchResult]]]:
         tokens = tokenize_text(query)
 
@@ -633,7 +634,6 @@ class InvertedIndex:
                         original_docid=doc_info.original_docid,
                         url=doc_info.url,
                         title=doc_info.title,
-                        body=doc_info.body[:length_body],
                     ),
                 )
             )

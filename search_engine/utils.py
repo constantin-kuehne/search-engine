@@ -28,7 +28,6 @@ class DocumentInfo(NamedTuple):
     original_docid: str
     url: str
     title: str
-    body: str
 
 
 class SearchResult(NamedTuple):
@@ -36,4 +35,3 @@ class SearchResult(NamedTuple):
     original_docid: str
     url: str
     title: str
-    body: str

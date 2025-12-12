@@ -29,7 +29,7 @@ class InvertedIndexIngestion:
 
         # simplemma + woosh
 
-        self.corpus_offset: dict[int, int] = {}
+        self.doc_info_offset: dict[int, int] = {}
         self.term_index: dict[str, int] = {}
 
     def save_to_disk(
@@ -98,9 +98,9 @@ class InvertedIndexIngestion:
         doc_id_file.close()
         position_list_file.close()
 
-    def save_corpus_offset(self, file_path_corpus_offset: str | Path):
+    def save_doc_info_offset(self, file_path_corpus_offset: str | Path):
         with open(file_path_corpus_offset, "wb") as f:
-            pickle.dump(self.corpus_offset, f)
+            pickle.dump(self.doc_info_offset, f)
 
     def save_term_index(self, file_path_term_index: str | Path):
         with open(file_path_term_index, "wb") as f:
@@ -374,6 +374,9 @@ class InvertedIndexIngestion:
 
 class PROCESSED_ROW(NamedTuple):
     docid: int
+    original_docid: str
+    url: str
+    title: str
     tokens: list[str]
 
 
@@ -394,7 +397,7 @@ def process_data(
             row = next(csv.reader([line], delimiter="\t"))
             tokens = tokenize_text(row[3])
 
-            yield pos, PROCESSED_ROW(i, tokens)
+            yield pos, PROCESSED_ROW(i, row[0], row[1], row[2], tokens)
 
             pos = file.tell()
             line = file.readline()
@@ -432,9 +435,13 @@ def merge_blocks(
 
 
 if __name__ == "__main__":
-    blocks_dir = Path("./blocks/")
-    staged_dir = Path("./staged/")
-    final_dir = Path("./final/")
+    # blocks_dir = Path("./blocks/")
+    # staged_dir = Path("./staged/")
+    # final_dir = Path("./final/")
+
+    blocks_dir = Path("./blocks_little/")
+    staged_dir = Path("./staged_little/")
+    final_dir = Path("./final_little/")
 
     blocks_dir.mkdir(parents=True, exist_ok=True)
     (blocks_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
@@ -446,19 +453,18 @@ if __name__ == "__main__":
 
     final_dir.mkdir(parents=True, exist_ok=True)
 
-    # blocks_dir = Path("./blocks_little/")
-    # staged_dir = Path("./staged_little/")
-    # final_dir = Path("./final_little/")
+    path_doc_info = final_dir / "doc_info_file"
+    doc_info_file = path_doc_info.open("wb")
 
     index = InvertedIndexIngestion()
 
     print("Starting indexing...")
     start = time.time()
 
-    block_size = 7_500
+    block_size = 500
     block_num = 0
 
-    max_rows = None
+    max_rows = 15_000
 
     num_processes = (os.cpu_count() or 6) - 2
 
@@ -484,7 +490,10 @@ if __name__ == "__main__":
                 chunk = []
                 block_num += 1
 
-            index.corpus_offset[row.docid] = pos
+            index.doc_info_offset[row.docid] = doc_info_file.tell()
+            doc_info_file.write(
+                "\t".join([row.original_docid, row.url, row.title]).encode("utf-8")
+            )
 
         if chunk:
             pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir))
@@ -493,6 +502,8 @@ if __name__ == "__main__":
 
         pool.close()
         pool.join()
+
+    doc_info_file.close()
 
     with open(final_dir / "document_lengths", "wb") as f:
         pickle.dump(document_lengths, f)
@@ -553,7 +564,7 @@ if __name__ == "__main__":
 
     print(f"Finished merging blocks in {time.time() - start_merge:.4f}s")
 
-    index.save_corpus_offset(final_dir / "corpus_offset_file")
+    index.save_doc_info_offset(final_dir / "corpus_offset_file")
     index.save_term_index(final_dir / "term_index_file")
 
     end = time.time()

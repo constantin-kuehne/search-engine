@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    final_dir = Path("./final/")
+    final_dir = Path("./final_little/")
 
     print("Loading inverted index from disk...")
     start = time.time()
@@ -41,7 +41,7 @@ if __name__ == "__main__":
         final_dir / "position_list_file_merged_final",
         final_dir / "term_index_file",
         final_dir / "corpus_offset_file",
-        "./msmarco-docs.tsv",
+        final_dir / "doc_info_file",
         final_dir / "index_metadata",
         final_dir / "document_lengths",
     )
@@ -58,7 +58,6 @@ if __name__ == "__main__":
                 query,
                 mode=args.mode,
                 num_return=args.num_return,
-                length_body=args.length_body,
             )
             print(f"We found {num_results} results matching your query.")
             print(f"{min(args.num_return, num_results)} of them are:")
@@ -67,9 +66,9 @@ if __name__ == "__main__":
             for score, search_result in results:
                 print("-" * num_terminal_columns)
                 print(
-                    f"Score: {score} - DocId: {search_result.original_docid} ({search_result.url}) - {search_result.title} - "
+                    f"Score: {score} - DocId: {search_result.original_docid} ({search_result.url}) - {search_result.title}"
                 )
-                print(f"Body ({args.length_body} chars): {search_result.body}")
+                # print(f"Body ({args.length_body} chars): {search_result.body}")
 
             end = time.time()
             print(f"\nSearch took {end - start:.4f} seconds.")
