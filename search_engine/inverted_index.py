@@ -2,11 +2,13 @@ import csv
 import heapq
 import math
 import mmap
+import os
 import pickle
 import struct
 from functools import partial
 from pathlib import Path
 from typing import Optional, Sequence
+from array import array
 
 from ordered_set import OrderedSet
 
@@ -45,10 +47,14 @@ class InvertedIndex:
 
         self.mm_doc_info = mmap.mmap(doc_info_file.fileno(), length=0, prot=mmap.PROT_READ)
 
-        doc_info_offset_file = open(file_path_doc_info_offset, "rb")
-        self.docs: dict[int, int] = pickle.load(doc_info_offset_file)
-
-        doc_info_offset_file.close()
+        with open(file_path_doc_info_offset, "rb") as f:
+            self.docs: array = array('I')
+            if self.docs.itemsize != 4:
+                self.docs = array('L')
+                if self.docs.itemsize != 4:
+                    raise RuntimeError("Machine does not have an exact 4 byte integer type")
+            file_bytes: int = os.path.getsize(file_path_doc_info_offset)
+            self.docs.fromfile(f, file_bytes // 4)
 
         term_index_file.close()
 
@@ -60,7 +66,13 @@ class InvertedIndex:
             self.metadata = pickle.load(f)
 
         with open(file_path_document_lengths, "rb") as f:
-            self.document_lengths = pickle.load(f)
+            file_bytes: int = os.path.getsize(file_path_document_lengths)
+            self.document_lengths: array = array('I')
+            if self.document_lengths.itemsize != 4:
+                self.document_lengths = array('L')
+                if self.document_lengths.itemsize != 4:
+                    raise RuntimeError("Machine does not have an exact 4 byte integer type")
+            self.document_lengths.fromfile(f, file_bytes // 4) # uint32_t
 
     def has_phrase(self, pos_list_list: list[tuple[int]]) -> bool:
         indices = [0 for _ in range(len(pos_list_list))]
@@ -515,7 +527,10 @@ class InvertedIndex:
 
     def get_doc_info(self, doc_id: int) -> DocumentInfo:
         offset = self.docs[doc_id]
-        next_offset = self.docs.get(doc_id + 1, self.mm_doc_info.size())
+        if len(self.docs) == doc_id + 1:
+            next_offset = self.mm_doc_info.size()
+        else:
+            next_offset = self.docs[doc_id + 1]
         line = self.mm_doc_info[offset:next_offset].decode("utf-8")
         row = next(self.reader([line]))
         return DocumentInfo(

@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    final_dir = Path("./final_little/")
+    final_dir = Path("./final/")
 
     print("Loading inverted index from disk...")
     start = time.time()
@@ -40,7 +40,7 @@ if __name__ == "__main__":
         final_dir / "doc_id_file_merged_final",
         final_dir / "position_list_file_merged_final",
         final_dir / "term_index_file",
-        final_dir / "corpus_offset_file",
+        final_dir / "doc_info_offsets",
         final_dir / "doc_info_file",
         final_dir / "index_metadata",
         final_dir / "document_lengths",
