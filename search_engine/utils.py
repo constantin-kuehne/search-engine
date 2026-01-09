@@ -3,7 +3,7 @@ from enum import Enum
 from typing import NamedTuple
 
 LAST_UTF8_CODE_POINT = "ÿ"
-LAST_UNICODE_CODE_POINT = "\U0010FFFF"
+LAST_UNICODE_CODE_POINT = "\U0010ffff"
 
 INT_SIZE = 4
 LONG_SIZE = 8
@@ -21,7 +21,7 @@ class SearchMode(Enum):
     QUERY_EVALUATOR = "QUERY_EVALUATOR"
 
 
-POSTING = tuple[list[int], list[list[int]]]
+POSTING = tuple[list[int], list[list[int]], list[list[int]]]
 
 
 class DocumentInfo(NamedTuple):

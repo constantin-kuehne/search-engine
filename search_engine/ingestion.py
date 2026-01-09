@@ -24,8 +24,11 @@ class InvertedIndexIngestion:
     def __init__(
         self,
     ) -> None:
-        self.index: dict[str, POSTING] = {}  # term -> (document list, [postion list])
+        self.index: dict[
+            str, POSTING
+        ] = {}  # term -> (document list, [postion list], [position list title])
         # TODO: use list instead of dict for document ids
+        self.index_title: dict[str, POSTING] = {}
 
         # simplemma + woosh
 
@@ -48,49 +51,62 @@ class InvertedIndexIngestion:
         doc_id_file = open(file_path_doc_id, "wb")
         position_list_file = open(file_path_position_list, mode="wb")
 
-        for term, (doc_list, position_list_list) in sorted(self.index.items()):
+        sorted_index_keys = sorted(self.index.keys())
+        for term in sorted_index_keys:
+            doc_list, position_list_list, position_list_list_title = self.index[term]
+
             document_index = []
 
             term_bytes = term.encode("utf-8")
+            # term length
             doc_id_file.write(struct.pack("I", len(term_bytes)))
+            # term bytes
             doc_id_file.write(term_bytes)
+            # document frequency
             doc_id_file.write(struct.pack("I", len(doc_list)))
+            # document list
             doc_id_file.write(struct.pack(f"{len(doc_list)}I", *doc_list))
 
             term_frequencies: list[int] = []
-            for position_list in position_list_list:
+            term_frequencies_title: list[int] = []
+
+            for position_list, position_list_title in zip(
+                position_list_list, position_list_list_title
+            ):
                 document_index.append(position_list_file.tell())
 
-                position_list_file.write(struct.pack("I", len(position_list)))
+                position_list_combined = position_list_title + position_list
+
+                position_list_file.write(struct.pack("I", len(position_list_combined)))
                 term_frequencies.append(len(position_list))
+                term_frequencies_title.append(len(position_list_title))
 
                 position_list_file.write(
-                    struct.pack(f"{len(position_list)}I", *position_list)
+                    struct.pack(
+                        f"{len(position_list_combined)}I", *position_list_combined
+                    )
                 )
 
             assert len(document_index) == len(doc_list)
-            # {
-            #     "echo": offset_into_doc_id_file
-            #     "test": offset_into_doc_id_file2
-            # }
 
-            # |
-            # v
-            # len(term) term len(doc_id_list)[doc_id, doc_id, doc_id][offset_pos_list, offset_pos_list, offset_pos_list]
+            # term frequencies title
+            doc_id_file.write(
+                struct.pack(f"{len(term_frequencies_title)}I", *term_frequencies_title)
+            )
 
-            # |
-            # v
-            # len(term2) term2 len(docid_list2)[doc_id2, doc_id2, doc_id2][offset_pos_list2, offset_pos_list2, offset_pos_list2][tf, tf, tf]
-            # offset -> index [pos_list1_offset, pos_list2_offset, pos_list3_offset] -> x*len(pos_List)
-
-            # |
-            # v
-            # len(pos_list) [1, 4, 9]
-
+            # term frequencies
             doc_id_file.write(
                 struct.pack(f"{len(term_frequencies)}I", *term_frequencies)
             )
+            # position list offsets
             doc_id_file.write(struct.pack(f"{len(document_index)}Q", *document_index))
+
+            # doc id file: term length | term bytes | doc freq | [doc list] | [term frequencies] | [position list offsets]
+
+            # doc id title: term length | term bytes | doc freq | [doc list] | [term frequencies title] | [term frequencies] | [position list offsets]
+
+            # modify position list to include title positions = [title pos 1, title pos 2, body pos 1, body pos2]
+            # read by using the term frequencies title to separate them
 
         del self.index
         self.index = {}
@@ -107,15 +123,15 @@ class InvertedIndexIngestion:
             pickle.dump(self.term_index, f)
 
     @staticmethod
-    def __get_position_list_bytes_and_offsets_and_term_frequencies(
+    def __get_position_list_bytes_and_offsets(
         current_offset: int,
         bytes_position_list_index,
         length_doc_list: int,
         index: int,
         mm_position_files: list[mmap.mmap],
-    ) -> tuple[bytes, list[int], list[int]]:
+    ) -> tuple[bytes, list[int]]:
+        # TODO: remove term frequencies and calulate outside function by combining the lists
         offsets_pos_list: list[int] = []
-        term_frequencies: list[int] = []
 
         first_position_list_offset = struct.unpack(
             "Q",
@@ -134,7 +150,6 @@ class InvertedIndexIngestion:
                     current_block_pos_offset : current_block_pos_offset + INT_SIZE
                 ],
             )[0]
-            term_frequencies.append(length_pos_list_local)
 
             size_of_current_pos_list_block = INT_SIZE + length_pos_list_local * INT_SIZE
 
@@ -152,7 +167,6 @@ class InvertedIndexIngestion:
                 first_position_list_offset:current_block_pos_offset
             ],
             offsets_pos_list,
-            term_frequencies,
         )
 
     def merge_blocks(
@@ -242,16 +256,16 @@ class InvertedIndexIngestion:
             ][
                 offset_doc_list
                 + INT_SIZE
-                + length_doc_list * INT_SIZE * 2 : offset_doc_list
+                + length_doc_list * INT_SIZE * 3 : offset_doc_list
                 + INT_SIZE
                 + length_doc_list
                 * INT_SIZE
-                * 2  # times 2 because we want to skip the doc id list and the term frequencies list
+                * 3  # times 3 because we want to skip the doc id list and the term frequencies title list and term frequencies list
                 + length_doc_list * LONG_SIZE
             ]
 
-            bytes_position_list, offsets_pos_list, term_frequencies = (
-                self.__get_position_list_bytes_and_offsets_and_term_frequencies(
+            bytes_position_list, offsets_pos_list = (
+                self.__get_position_list_bytes_and_offsets(
                     position_list_file.tell(),
                     bytes_position_list_index,
                     length_doc_list,
@@ -260,12 +274,32 @@ class InvertedIndexIngestion:
                 )
             )
 
+            term_frequencies_title: bytes = mm_files[index][
+                offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE : offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE
+            ]
+
+            term_frequencies: bytes = mm_files[index][
+                offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE : offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE
+            ]
+
             file_positions[index] = (
                 offset_doc_list
                 + INT_SIZE
                 + length_doc_list
                 * INT_SIZE
-                * 2  # times two becaue of the doc list and term frequencies list
+                * 3  # times 3 becaue of the doc list, term frequencies title list and term frequencies list
                 + length_doc_list * LONG_SIZE  # this one is the postion list index
             )
 
@@ -294,25 +328,45 @@ class InvertedIndexIngestion:
                 bytes_position_list_index_local = mm_files[index][
                     offset_doc_list_local
                     + INT_SIZE
-                    + length_doc_list_local * INT_SIZE * 2 : offset_doc_list_local
+                    + length_doc_list_local * INT_SIZE * 3 : offset_doc_list_local
                     + INT_SIZE
-                    + length_doc_list_local * INT_SIZE * 2
+                    + length_doc_list_local * INT_SIZE * 3
                     + length_doc_list_local * LONG_SIZE
                 ]
 
                 (
                     bytes_position_list_local,
                     offsets_pos_list_local,
-                    term_frequencies_local,
-                ) = self.__get_position_list_bytes_and_offsets_and_term_frequencies(
+                ) = self.__get_position_list_bytes_and_offsets(
                     position_list_file.tell(),
                     bytes_position_list_index_local,
                     length_doc_list_local,
                     index,
                     mm_position_files,
                 )
+
                 offsets_pos_list += offsets_pos_list_local
                 position_list_file.write(bytes_position_list_local)
+
+                term_frequencies_title_local: bytes = mm_files[index][
+                    offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE : offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                ]
+
+                term_frequencies_local: bytes = mm_files[index][
+                    offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE : offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                ]
+
+                term_frequencies_title += term_frequencies_title_local
                 term_frequencies += term_frequencies_local
 
                 length_doc_list += length_doc_list_local
@@ -321,7 +375,7 @@ class InvertedIndexIngestion:
                     + INT_SIZE
                     + length_doc_list_local
                     * INT_SIZE
-                    * 2  # times two becaue of the doc list and term frequencies list
+                    * 3  # times 3 becaue of the doc list, term frequencies title list and term frequencies list
                     + length_doc_list_local
                     * LONG_SIZE  # this one is the postion list index
                 )
@@ -331,12 +385,14 @@ class InvertedIndexIngestion:
 
                 doc_id_file.write(bytes_in_file)
 
-            assert len(term_frequencies) == length_doc_list
+            assert (
+                len(struct.unpack(f"{length_doc_list}I", term_frequencies))
+                == length_doc_list
+            )
             assert len(offsets_pos_list) == length_doc_list
 
-            doc_id_file.write(
-                struct.pack(f"{len(term_frequencies)}I", *term_frequencies)
-            )
+            doc_id_file.write(term_frequencies_title)
+            doc_id_file.write(term_frequencies)
 
             doc_id_file.write(
                 struct.pack(f"{len(offsets_pos_list)}Q", *offsets_pos_list)
@@ -359,17 +415,40 @@ class InvertedIndexIngestion:
 
         position_list_file.close()
 
-    def add_document(self, doc_id: int, tokens: list[str]) -> None:
-        for position, term in enumerate(tokens):
-            if term not in self.index:
-                self.index[term] = ([doc_id], [[position]])
-            else:
-                doc_list, position_list_list = self.index[term]
-                if doc_list[-1] != doc_id:
-                    doc_list.append(doc_id)
-                    position_list_list.append([position])
+    def add_document(
+        self, doc_id: int, tokens: list[str], tokens_title: list[str]
+    ) -> None:
+        length = len(tokens) + len(tokens_title)
+        for position in range(length):
+            if position < len(tokens_title):
+                term = tokens_title[position]
+                if term not in self.index:
+                    self.index[term] = ([doc_id], [[]], [[position]])
                 else:
-                    position_list_list[-1].append(position)
+                    doc_list, position_list_list, position_list_list_title = self.index[
+                        term
+                    ]
+                    if doc_list[-1] != doc_id:
+                        doc_list.append(doc_id)
+                        position_list_list.append([])
+                        position_list_list_title.append([position])
+                    else:
+                        position_list_list_title[-1].append(position)
+            else:
+                position -= len(tokens_title)
+                term = tokens[position]
+                if term not in self.index:
+                    self.index[term] = ([doc_id], [[position]], [[]])
+                else:
+                    doc_list, position_list_list, position_list_list_title = self.index[
+                        term
+                    ]
+                    if doc_list[-1] != doc_id:
+                        doc_list.append(doc_id)
+                        position_list_list.append([position])
+                        position_list_list_title.append([])
+                    else:
+                        position_list_list[-1].append(position)
 
 
 class PROCESSED_ROW(NamedTuple):
@@ -378,6 +457,7 @@ class PROCESSED_ROW(NamedTuple):
     url: str
     title: str
     tokens: list[str]
+    tokens_title: list[str]
 
 
 def process_data(
@@ -396,8 +476,9 @@ def process_data(
 
             row = next(csv.reader([line], delimiter="\t"))
             tokens = tokenize_text(row[3])
+            tokens_title = tokenize_text(row[2])
 
-            yield pos, PROCESSED_ROW(i, row[0], row[1], row[2], tokens)
+            yield pos, PROCESSED_ROW(i, row[0], row[1], row[2], tokens, tokens_title)
 
             pos = file.tell()
             line = file.readline()
@@ -408,7 +489,7 @@ def process_chunk(chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path) 
     local_index = InvertedIndexIngestion()
 
     for row in chunk:
-        local_index.add_document(row.docid, row.tokens)
+        local_index.add_document(row.docid, row.tokens, row.tokens_title)
 
     local_index.save_to_disk(
         blocks_dir / f"doc_id_files/doc_id_file_block_{block_num}",
