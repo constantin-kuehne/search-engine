@@ -437,10 +437,11 @@ class InvertedIndexIngestion:
                     file_size: int = os.path.getsize(source_path)
                     num_items: int = file_size // 4
                     temp_array.fromfile(source, num_items)
-                    for i in range(1, num_items):
+                    for i in range(0, num_items):
                         temp_array[i] = temp_array[i] + last_chunk_highest_offset
 
                     last_chunk_highest_offset = temp_array[-1]
+                    dest.seek(-4, os.SEEK_CUR) # overwrite the last index written in the last block (the first index of this block), as array.tofile writes the full array
                     temp_array.tofile(dest)
                     temp_array.clear()
 
@@ -463,9 +464,6 @@ def process_data(
 
             if max_rows is not None and i >= max_rows:
                 break
-
-            # row = next(csv.reader([line], delimiter="\t"))
-            # tokens = tokenize_text(row[3])
 
             yield pos, PROCESSED_ROW(i, line)
 
@@ -547,12 +545,10 @@ if __name__ == "__main__":
     max_rows = 50000
 
     num_processes: int = (os.cpu_count() or 6) - 2
-    # num_processes: int = 1
 
     print("Starting processing rows...")
     chunk = []
 
-    # document_lengths: dict[int, int] = {}
     num_docs = 0
     cumulative_length = 0
 
@@ -564,7 +560,6 @@ if __name__ == "__main__":
             "./msmarco-docs.tsv", max_rows=max_rows
         ):
             chunk.append(row)
-            # document_lengths[row.docid] = len(row.tokens)
             cumulative_length += len(row.line)
             num_docs += 1
             if row.docid > 0 and row.docid % block_size == 0:
@@ -594,8 +589,6 @@ if __name__ == "__main__":
 
         pool.close()
         pool.join()
-    # with open(final_dir / "document_lengths", "wb") as f:
-    #     pickle.dump(document_lengths, f)
 
     average_doc_length = cumulative_length / num_docs
     meta_data = {"average_doc_length": average_doc_length, "num_docs": num_docs}

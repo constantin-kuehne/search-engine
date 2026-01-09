@@ -59,7 +59,7 @@ class InvertedIndex:
         term_index_file.close()
 
         self.reader = lambda x: csv.DictReader(
-            x, delimiter="\t", fieldnames=["docid", "url", "title", "body"]
+            x, delimiter="\t", fieldnames=["docid", "url", "title"]
         )
 
         with open(file_path_metadata, "rb") as f:
