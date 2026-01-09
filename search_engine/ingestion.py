@@ -126,10 +126,6 @@ class InvertedIndexIngestion:
         doc_id_file.close()
         position_list_file.close()
 
-    def save_doc_info_offset(self, file_path_corpus_offset: str | Path):
-        with open(file_path_corpus_offset, "wb") as f:
-            pickle.dump(self.doc_info_offset, f)
-
     def save_term_index(self, file_path_term_index: str | Path):
         with open(file_path_term_index, "wb") as f:
             pickle.dump(self.term_index, f)
@@ -300,7 +296,19 @@ class InvertedIndexIngestion:
             if file_positions[index] >= mm_files[index].size():
                 file_ended[index] = True
 
-            doc_id_file.write(bytes_in_file)
+            for index in min_indices[1:]:
+                pos = file_positions[index]
+
+                offset_doc_list_local = pos + INT_SIZE + length_term
+                length_doc_list_local: int = get_length_from_bytes(
+                    mm_files[index], offset_doc_list_local
+                )
+                length_doc_list += length_doc_list_local
+
+            doc_id_file.write(bytes_in_file[0 : INT_SIZE + length_term])
+            doc_id_file.write(struct.pack("I", length_doc_list))
+
+            doc_id_file.write(bytes_in_file[INT_SIZE + INT_SIZE + length_term :])
             position_list_file.write(bytes_position_list)
 
             for index in min_indices[1:]:
@@ -343,7 +351,6 @@ class InvertedIndexIngestion:
                 position_list_file.write(bytes_position_list_local)
                 term_frequencies += term_frequencies_local
 
-                length_doc_list += length_doc_list_local
                 file_positions[index] = (
                     offset_doc_list_local
                     + INT_SIZE
@@ -369,13 +376,6 @@ class InvertedIndexIngestion:
             doc_id_file.write(
                 struct.pack(f"{len(offsets_pos_list)}Q", *offsets_pos_list)
             )
-
-            doc_id_file_end_pos = doc_id_file.tell()
-
-            # go back and write the merged length of the doc list
-            doc_id_file.seek(doc_id_file_pos + INT_SIZE + length_term)
-            doc_id_file.write(struct.pack("I", length_doc_list))
-            doc_id_file.seek(doc_id_file_end_pos)
 
         for file_handle in file_handles:
             file_handle.close()
@@ -650,7 +650,6 @@ if __name__ == "__main__":
 
     print(f"Finished merging blocks in {time.time() - start_merge:.4f}s")
 
-    index.save_doc_info_offset(final_dir / "corpus_offset_file")
     index.save_term_index(final_dir / "term_index_file")
 
     end = time.time()
