@@ -28,10 +28,14 @@ class InvertedIndex:
         file_path_doc_info: str | Path,
         file_path_metadata: str | Path,
         file_path_document_lengths: str | Path,
+        file_path_bodies: str | Path,
+        file_path_bodies_offsets: str | Path
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
         term_index_file = open(file_path_term_index, "rb")
         position_list_file = open(file_path_position_list, mode="rb")
+        bodies_file = open(file_path_bodies, mode="rb")
+        bodies_offsets_file = open(file_path_bodies_offsets, mode="rb")
 
         doc_info_file = open(file_path_doc_info, "rb")
 
@@ -46,6 +50,9 @@ class InvertedIndex:
         )
 
         self.mm_doc_info = mmap.mmap(doc_info_file.fileno(), length=0, prot=mmap.PROT_READ)
+
+        self.mm_bodies = mmap.mmap(bodies_file.fileno(), length=0, prot=mmap.PROT_READ)
+        self.mm_bodies_offsets = mmap.mmap(bodies_offsets_file.fileno(), length=0, prot=mmap.PROT_READ)
 
         with open(file_path_doc_info_offset, "rb") as f:
             self.docs: array = array('I')
@@ -533,10 +540,16 @@ class InvertedIndex:
             next_offset = self.docs[doc_id + 1]
         line = self.mm_doc_info[offset:next_offset].decode("utf-8")
         row = next(self.reader([line]))
+
+        offset_in_offsets = doc_id * 8
+        bodies_offset = struct.unpack("Q", self.mm_bodies_offsets[offset_in_offsets : offset_in_offsets + 8])[0] # the offsets stored here are 8 bytes
+        bodies_end_offset = struct.unpack("Q", self.mm_bodies_offsets[offset_in_offsets + 8 : offset_in_offsets + 16])[0]
+
         return DocumentInfo(
             original_docid=row["docid"],
             url=row["url"],
             title=row["title"],
+            body_snippet=self.mm_bodies[bodies_offset:bodies_end_offset].decode("utf-8")
         )
 
     def bm25_score(
@@ -560,7 +573,7 @@ class InvertedIndex:
         return score
 
     def search(
-        self, query: str, mode: SearchMode, num_return: int = 10
+        self, query: str, mode: SearchMode, num_return: int = 10, snippet_length: int = 100
     ) -> tuple[int, list[tuple[float, SearchResult]]]:
         tokens = tokenize_text(query)
 
@@ -649,6 +662,7 @@ class InvertedIndex:
                         original_docid=doc_info.original_docid,
                         url=doc_info.url,
                         title=doc_info.title,
+                        body_snippet=doc_info.body_snippet[0:snippet_length],
                     ),
                 )
             )

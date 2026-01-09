@@ -413,6 +413,49 @@ class InvertedIndexIngestion:
                 with open(source_path, mode='rb') as source:
                     copyfileobj(source, dest)
 
+    def merge_offsets(
+            self,
+            dest_path: str | Path,
+            src_path_stem: str | Path,
+            src_filename_prefix: str,
+            num_blocks: int,
+            INT_SIZE: int
+    ) -> None:
+        if INT_SIZE != 4 and INT_SIZE != 8:
+            raise RuntimeError("Not implemented yet!")
+
+        if INT_SIZE == 4:
+            wanted_array_format_char = 'I'
+            fallback_array_format_char = 'L'
+        if INT_SIZE == 8:
+            wanted_array_format_char = 'L'
+            fallback_array_format_char = 'Q'
+
+        with open(dest_path, mode='wb') as dest:
+            with open(src_path_stem / (src_filename_prefix + '0'), mode='rb') as source:
+                copyfileobj(source, dest)
+                source.seek(-INT_SIZE, os.SEEK_END)
+                last_chunk_highest_offset: int = int.from_bytes(source.peek(4), signed=False, byteorder='little') # this is the offset at which the next chunk starts
+
+            temp_array: array = array(wanted_array_format_char)
+            if temp_array.itemsize != INT_SIZE:
+                temp_array = array(fallback_array_format_char)
+                if temp_array.itemsize != INT_SIZE:
+                    raise RuntimeError(f"Machine does not have an exact {INT_SIZE} byte integer type")
+
+            for source_path in [src_path_stem / (src_filename_prefix + str(block_id)) for block_id in range(1, num_blocks)]:
+                with open(source_path, mode='rb') as source:
+                    file_size: int = os.path.getsize(source_path)
+                    num_items: int = file_size // INT_SIZE
+                    temp_array.fromfile(source, num_items)
+                    for i in range(0, num_items):
+                        temp_array[i] = temp_array[i] + last_chunk_highest_offset
+
+                    last_chunk_highest_offset = temp_array[-1]
+                    dest.seek(-INT_SIZE, os.SEEK_CUR) # overwrite the last index written in the last block (the first index of this block), as array.tofile writes the full array
+                    temp_array.tofile(dest)
+                    temp_array.clear()
+
     def merge_doc_info_offsets(
         self,
         dest_path: str | Path,
@@ -420,30 +463,28 @@ class InvertedIndexIngestion:
         src_filename_prefix: str,
         num_blocks: int
     ) -> None:
-        with open(dest_path, mode='wb') as dest:
-            with open(src_path_stem / (src_filename_prefix + '0'), mode='rb') as source:
-                copyfileobj(source, dest)
-                source.seek(-4, os.SEEK_END)
-                last_chunk_highest_offset: int = int.from_bytes(source.peek(4), signed=False, byteorder='little') # this is the offset at which the next chunk starts
+        self.merge_offsets(
+            dest_path,
+            src_path_stem,
+            src_filename_prefix,
+            num_blocks,
+            4
+        )
 
-            temp_array: array = array('I')
-            if temp_array.itemsize != 4:
-                temp_array = array('L')
-                if temp_array.itemsize != 4:
-                    raise RuntimeError("Machine does not have an exact 4 byte integer type")
-
-            for source_path in [src_path_stem / (src_filename_prefix + str(block_id)) for block_id in range(1, num_blocks)]:
-                with open(source_path, mode='rb') as source:
-                    file_size: int = os.path.getsize(source_path)
-                    num_items: int = file_size // 4
-                    temp_array.fromfile(source, num_items)
-                    for i in range(0, num_items):
-                        temp_array[i] = temp_array[i] + last_chunk_highest_offset
-
-                    last_chunk_highest_offset = temp_array[-1]
-                    dest.seek(-4, os.SEEK_CUR) # overwrite the last index written in the last block (the first index of this block), as array.tofile writes the full array
-                    temp_array.tofile(dest)
-                    temp_array.clear()
+    def merge_bodies_offsets(
+            self,
+            dest_path: str | Path,
+            src_path_stem: str | Path,
+            src_filename_prefix: str,
+            num_blocks: int
+    ) -> None:
+        self.merge_offsets(
+            dest_path,
+            src_path_stem,
+            src_filename_prefix,
+            num_blocks,
+            8
+        )
 
 class PROCESSED_ROW(NamedTuple):
     docid: int
@@ -476,6 +517,9 @@ def process_chunk(chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path) 
     local_index = InvertedIndexIngestion()
 
     doc_info_file = open(blocks_dir / f"doc_info_file_{block_num}", "wb")
+    bodies_file = open(blocks_dir / f"bodies_{block_num}", "wb")
+    bodies_offsets_file = open(blocks_dir / f"bodies_offsets_{block_num}", "wb")
+    bodies_file_pos = 0
 
     for doc in chunk:
         row: list[str] = next(csv.reader([doc.line], delimiter="\t"))
@@ -486,10 +530,15 @@ def process_chunk(chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path) 
         doc_info_file.write(
             "\t".join([row[0], row[1], row[2]]).encode("utf-8")
         )
+        encoded_body = row[3].encode("utf-8")
+        bodies_file.write(encoded_body)
+        bodies_offsets_file.write(struct.pack("Q", bodies_file_pos))
+        bodies_file_pos += len(encoded_body)
 
     # append the current index once more, i.e., the index directly after all values from this chunk (like C++ end() iterator)
     # this is the index at which the next chunk starts and is used during the merge
     local_index.doc_info_offset.append(doc_info_file.tell())
+    bodies_offsets_file.write(struct.pack("Q", bodies_file_pos))
     doc_info_file.close()
 
     local_index.save_to_disk(
@@ -606,7 +655,9 @@ if __name__ == "__main__":
 
     index.merge_contiguous_files(final_dir / "document_lengths", blocks_dir, "document_lengths_", num_files)
     index.merge_contiguous_files(final_dir / "doc_info_file", blocks_dir, "doc_info_file_", num_files)
+    index.merge_contiguous_files(final_dir / "bodies", blocks_dir, "bodies_", num_files)
     index.merge_doc_info_offsets(final_dir / "doc_info_offsets", blocks_dir, "doc_info_offsets_", num_files)
+    index.merge_bodies_offsets(final_dir / "bodies_offsets", blocks_dir, "bodies_offsets_", num_files)
 
     current_start = 0
     with Pool(processes=num_processes) as pool:
