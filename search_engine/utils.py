@@ -29,10 +29,3 @@ class DocumentInfo(NamedTuple):
     url: str
     title: str
     body_snippet: str
-
-class SearchResult(NamedTuple):
-    doc_id: int
-    original_docid: str
-    url: str
-    title: str
-    body_snippet: str

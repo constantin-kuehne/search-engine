@@ -5,6 +5,7 @@ import mmap
 import os
 import pickle
 import struct
+import time
 from functools import partial
 from pathlib import Path
 from typing import Optional, Sequence
@@ -14,8 +15,7 @@ from ordered_set import OrderedSet
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
-from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode,
-                                 SearchResult, get_length_from_bytes)
+from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode, get_length_from_bytes)
 
 
 class InvertedIndex:
@@ -532,24 +532,29 @@ class InvertedIndex:
             empty_tuple: tuple[int] = tuple([])
             return empty_tuple, empty_tuple, empty_tuple
 
-    def get_doc_info(self, doc_id: int) -> DocumentInfo:
+    def get_doc_info(self, doc_id: int, snippet_length: int) -> DocumentInfo:
         offset = self.docs[doc_id]
         if len(self.docs) == doc_id + 1:
             next_offset = self.mm_doc_info.size()
         else:
             next_offset = self.docs[doc_id + 1]
         line = self.mm_doc_info[offset:next_offset].decode("utf-8")
-        row = next(self.reader([line]))
+
+        first_tab = line.index('\t')
+        original_docid = line[:first_tab]
+        second_tab = line.index('\t', first_tab + 1)
+        url = line[first_tab + 1 : second_tab]
+        title = line[second_tab + 1 : ]
 
         offset_in_offsets = doc_id * 8
         bodies_offset = struct.unpack("Q", self.mm_bodies_offsets[offset_in_offsets : offset_in_offsets + 8])[0] # the offsets stored here are 8 bytes
-        bodies_end_offset = struct.unpack("Q", self.mm_bodies_offsets[offset_in_offsets + 8 : offset_in_offsets + 16])[0]
+        bodies_end_offset = min(struct.unpack("Q", self.mm_bodies_offsets[offset_in_offsets + 8 : offset_in_offsets + 16])[0], bodies_offset + snippet_length)
 
         return DocumentInfo(
-            original_docid=row["docid"],
-            url=row["url"],
-            title=row["title"],
-            body_snippet=self.mm_bodies[bodies_offset:bodies_end_offset].decode("utf-8")
+            original_docid=original_docid,
+            url=url,
+            title=title,
+            body_snippet=self.mm_bodies[bodies_offset:bodies_end_offset].decode("utf-8", errors="replace")
         )
 
     def bm25_score(
@@ -574,7 +579,7 @@ class InvertedIndex:
 
     def search(
         self, query: str, mode: SearchMode, num_return: int = 10, snippet_length: int = 100
-    ) -> tuple[int, list[tuple[float, SearchResult]]]:
+    ) -> tuple[int, list[tuple[float, DocumentInfo]]]:
         tokens = tokenize_text(query)
 
         doc_list: list[tuple[int, ...]] = []
@@ -625,8 +630,6 @@ class InvertedIndex:
                 tokens
             )
 
-        results: list[tuple[float, SearchResult]] = []
-
         bm25_score = partial(
             self.bm25_score,
             df_tokens=doc_freqs,
@@ -644,28 +647,23 @@ class InvertedIndex:
                     flat_list.extend(flattened_sublist)
             return flat_list
 
+        result_candidates: list[tuple[float, int]] = []
+
         if len(matched_term_freqs) == 1 and len(matched_doc_ids) != 1:
             matched_term_freqs = list(zip(*matched_term_freqs))
         assert len(matched_doc_ids) == len(matched_term_freqs)
         for doc_id, term_freqs_token in zip(matched_doc_ids, matched_term_freqs):
             term_freqs_token = flatten(term_freqs_token)
-            doc_info = self.get_doc_info(doc_id)
 
             doc_length = self.document_lengths[doc_id]
             score = bm25_score(tf_tokens=term_freqs_token, doc_length=doc_length)
 
-            results.append(
-                (
-                    score,
-                    SearchResult(
-                        doc_id=doc_id,
-                        original_docid=doc_info.original_docid,
-                        url=doc_info.url,
-                        title=doc_info.title,
-                        body_snippet=doc_info.body_snippet[0:snippet_length],
-                    ),
-                )
-            )
-        results = sorted(results, key=lambda x: x[0], reverse=True)[:num_return]
+            result_candidates.append((score, doc_id))
+
+        results: list[tuple[float, DocumentInfo]] = []
+        result_candidates = sorted(result_candidates, key=lambda x: x[0], reverse=True)[:num_return]
+
+        for score, doc_id in result_candidates:
+            results.append((score, self.get_doc_info(doc_id, snippet_length)))
 
         return len(matched_doc_ids), results
