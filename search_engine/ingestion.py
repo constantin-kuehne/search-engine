@@ -2,6 +2,7 @@ import csv
 import mmap
 import os
 import pickle
+import shutil
 import struct
 import sys
 import time
@@ -27,8 +28,11 @@ class InvertedIndexIngestion:
     def __init__(
         self,
     ) -> None:
-        self.index: dict[str, POSTING] = {}  # term -> (document list, [postion list])
+        self.index: dict[
+            str, POSTING
+        ] = {}  # term -> (document list, [postion list], [position list title])
         # TODO: use list instead of dict for document ids
+        self.index_title: dict[str, POSTING] = {}
 
         # simplemma + woosh
 
@@ -76,49 +80,65 @@ class InvertedIndexIngestion:
         doc_info_offset_file.write(self.doc_info_offset)
         doc_info_offset_file.close()
 
-        for term, (doc_list, position_list_list) in sorted(self.index.items()):
+        sorted_index_keys = sorted(self.index.keys())
+        for term in sorted_index_keys:
+            doc_list, position_list_list, position_list_list_title = self.index[term]
+
             document_index = []
 
             term_bytes = term.encode("utf-8")
+            # term length
             doc_id_file.write(struct.pack("I", len(term_bytes)))
+            # term bytes
             doc_id_file.write(term_bytes)
+            # document frequency
             doc_id_file.write(struct.pack("I", len(doc_list)))
+            if term == "yet":
+                print(f"Writing term: {term} with doc freq {len(doc_list)}")
+            # document list
             doc_id_file.write(struct.pack(f"{len(doc_list)}I", *doc_list))
 
             term_frequencies: list[int] = []
-            for position_list in position_list_list:
+            term_frequencies_title: list[int] = []
+
+            for position_list, position_list_title in zip(
+                position_list_list, position_list_list_title
+            ):
                 document_index.append(position_list_file.tell())
 
-                position_list_file.write(struct.pack("I", len(position_list)))
+                position_list_combined = position_list_title + position_list
+
+                position_list_file.write(struct.pack("I", len(position_list_combined)))
                 term_frequencies.append(len(position_list))
+                term_frequencies_title.append(len(position_list_title))
 
                 position_list_file.write(
-                    struct.pack(f"{len(position_list)}I", *position_list)
+                    struct.pack(
+                        f"{len(position_list_combined)}I", *position_list_combined
+                    )
                 )
 
+            print(f"{term}: {term_frequencies_title} | {term_frequencies} | {doc_list}")
             assert len(document_index) == len(doc_list)
-            # {
-            #     "echo": offset_into_doc_id_file
-            #     "test": offset_into_doc_id_file2
-            # }
 
-            # |
-            # v
-            # len(term) term len(doc_id_list)[doc_id, doc_id, doc_id][offset_pos_list, offset_pos_list, offset_pos_list]
+            # term frequencies title
+            doc_id_file.write(
+                struct.pack(f"{len(term_frequencies_title)}I", *term_frequencies_title)
+            )
 
-            # |
-            # v
-            # len(term2) term2 len(docid_list2)[doc_id2, doc_id2, doc_id2][offset_pos_list2, offset_pos_list2, offset_pos_list2][tf, tf, tf]
-            # offset -> index [pos_list1_offset, pos_list2_offset, pos_list3_offset] -> x*len(pos_List)
-
-            # |
-            # v
-            # len(pos_list) [1, 4, 9]
-
+            # term frequencies
             doc_id_file.write(
                 struct.pack(f"{len(term_frequencies)}I", *term_frequencies)
             )
+            # position list offsets
             doc_id_file.write(struct.pack(f"{len(document_index)}Q", *document_index))
+
+            # doc id file: term length | term bytes | doc freq | [doc list] | [term frequencies] | [position list offsets]
+
+            # doc id title: term length | term bytes | doc freq | [doc list] | [term frequencies title] | [term frequencies] | [position list offsets]
+
+            # modify position list to include title positions = [title pos 1, title pos 2, body pos 1, body pos2]
+            # read by using the term frequencies title to separate them
 
         del self.index
         self.index = {}
@@ -131,15 +151,15 @@ class InvertedIndexIngestion:
             pickle.dump(self.term_index, f)
 
     @staticmethod
-    def __get_position_list_bytes_and_offsets_and_term_frequencies(
+    def __get_position_list_bytes_and_offsets(
         current_offset: int,
         bytes_position_list_index,
         length_doc_list: int,
         index: int,
         mm_position_files: list[mmap.mmap],
-    ) -> tuple[bytes, list[int], list[int]]:
+    ) -> tuple[bytes, list[int]]:
+        # TODO: remove term frequencies and calulate outside function by combining the lists
         offsets_pos_list: list[int] = []
-        term_frequencies: list[int] = []
 
         first_position_list_offset = struct.unpack(
             "Q",
@@ -158,7 +178,6 @@ class InvertedIndexIngestion:
                     current_block_pos_offset : current_block_pos_offset + INT_SIZE
                 ],
             )[0]
-            term_frequencies.append(length_pos_list_local)
 
             size_of_current_pos_list_block = INT_SIZE + length_pos_list_local * INT_SIZE
 
@@ -176,7 +195,6 @@ class InvertedIndexIngestion:
                 first_position_list_offset:current_block_pos_offset
             ],
             offsets_pos_list,
-            term_frequencies,
         )
 
     def merge_blocks(
@@ -255,10 +273,16 @@ class InvertedIndexIngestion:
                 mm_files[index], offset_doc_list
             )
 
+            if current_min == "yet":
+                print(
+                    f"START: {current_min} from files {min_indices} with doc list {struct.unpack(f'{length_doc_list}I', mm_files[index][offset_doc_list + INT_SIZE : offset_doc_list + INT_SIZE + INT_SIZE * length_doc_list])}"
+                )
+
             bytes_in_file = mm_files[index][
                 pos : offset_doc_list + INT_SIZE + length_doc_list * INT_SIZE
             ]
             doc_id_file_pos = doc_id_file.tell()
+
             self.term_index[current_min] = doc_id_file_pos
 
             bytes_position_list_index = mm_files[
@@ -266,16 +290,16 @@ class InvertedIndexIngestion:
             ][
                 offset_doc_list
                 + INT_SIZE
-                + length_doc_list * INT_SIZE * 2 : offset_doc_list
+                + length_doc_list * INT_SIZE * 3 : offset_doc_list
                 + INT_SIZE
                 + length_doc_list
                 * INT_SIZE
-                * 2  # times 2 because we want to skip the doc id list and the term frequencies list
+                * 3  # times 3 because we want to skip the doc id list and the term frequencies title list and term frequencies list
                 + length_doc_list * LONG_SIZE
             ]
 
-            bytes_position_list, offsets_pos_list, term_frequencies = (
-                self.__get_position_list_bytes_and_offsets_and_term_frequencies(
+            bytes_position_list, offsets_pos_list = (
+                self.__get_position_list_bytes_and_offsets(
                     position_list_file.tell(),
                     bytes_position_list_index,
                     length_doc_list,
@@ -284,12 +308,32 @@ class InvertedIndexIngestion:
                 )
             )
 
+            term_frequencies_title: bytes = mm_files[index][
+                offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE : offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE
+            ]
+
+            term_frequencies: bytes = mm_files[index][
+                offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE : offset_doc_list
+                + INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE
+                + length_doc_list * INT_SIZE
+            ]
+
             file_positions[index] = (
                 offset_doc_list
                 + INT_SIZE
                 + length_doc_list
                 * INT_SIZE
-                * 2  # times two becaue of the doc list and term frequencies list
+                * 3  # times 3 becaue of the doc list, term frequencies title list and term frequencies list
                 + length_doc_list * LONG_SIZE  # this one is the postion list index
             )
 
@@ -330,25 +374,45 @@ class InvertedIndexIngestion:
                 bytes_position_list_index_local = mm_files[index][
                     offset_doc_list_local
                     + INT_SIZE
-                    + length_doc_list_local * INT_SIZE * 2 : offset_doc_list_local
+                    + length_doc_list_local * INT_SIZE * 3 : offset_doc_list_local
                     + INT_SIZE
-                    + length_doc_list_local * INT_SIZE * 2
+                    + length_doc_list_local * INT_SIZE * 3
                     + length_doc_list_local * LONG_SIZE
                 ]
 
                 (
                     bytes_position_list_local,
                     offsets_pos_list_local,
-                    term_frequencies_local,
-                ) = self.__get_position_list_bytes_and_offsets_and_term_frequencies(
+                ) = self.__get_position_list_bytes_and_offsets(
                     position_list_file.tell(),
                     bytes_position_list_index_local,
                     length_doc_list_local,
                     index,
                     mm_position_files,
                 )
+
                 offsets_pos_list += offsets_pos_list_local
                 position_list_file.write(bytes_position_list_local)
+
+                term_frequencies_title_local: bytes = mm_files[index][
+                    offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE : offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                ]
+
+                term_frequencies_local: bytes = mm_files[index][
+                    offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE : offset_doc_list_local
+                    + INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                ]
+
+                term_frequencies_title += term_frequencies_title_local
                 term_frequencies += term_frequencies_local
 
                 file_positions[index] = (
@@ -356,7 +420,7 @@ class InvertedIndexIngestion:
                     + INT_SIZE
                     + length_doc_list_local
                     * INT_SIZE
-                    * 2  # times two becaue of the doc list and term frequencies list
+                    * 3  # times 3 becaue of the doc list, term frequencies title list and term frequencies list
                     + length_doc_list_local
                     * LONG_SIZE  # this one is the postion list index
                 )
@@ -366,12 +430,14 @@ class InvertedIndexIngestion:
 
                 doc_id_file.write(bytes_in_file)
 
-            assert len(term_frequencies) == length_doc_list
+            assert (
+                len(struct.unpack(f"{length_doc_list}I", term_frequencies))
+                == length_doc_list
+            )
             assert len(offsets_pos_list) == length_doc_list
 
-            doc_id_file.write(
-                struct.pack(f"{len(term_frequencies)}I", *term_frequencies)
-            )
+            doc_id_file.write(term_frequencies_title)
+            doc_id_file.write(term_frequencies)
 
             doc_id_file.write(
                 struct.pack(f"{len(offsets_pos_list)}Q", *offsets_pos_list)
@@ -387,19 +453,27 @@ class InvertedIndexIngestion:
 
         position_list_file.close()
 
-    def add_document(self, doc_id: int, tokens: list[str]) -> None:
+    def add_document(
+        self, doc_id: int, tokens: list[str], tokens_title: list[str]
+    ) -> None:
         self.document_lengths.append(len(tokens))
-
-        for position, term in enumerate(tokens):
-            if term not in self.index:
-                self.index[term] = ([doc_id], [[position]])
-            else:
-                doc_list, position_list_list = self.index[term]
-                if doc_list[-1] != doc_id:
-                    doc_list.append(doc_id)
-                    position_list_list.append([position])
+        length = len(tokens) + len(tokens_title)
+        
+        for position in range(length):
+            if position < len(tokens_title):
+                term = tokens_title[position]
+                if term not in self.index:
+                    self.index[term] = ([doc_id], [[]], [[position]])
                 else:
-                    position_list_list[-1].append(position)
+                    doc_list, position_list_list, position_list_list_title = self.index[
+                        term
+                    ]
+                    if doc_list[-1] != doc_id:
+                        doc_list.append(doc_id)
+                        position_list_list.append([])
+                        position_list_list_title.append([position])
+                    else:
+                        position_list_list_title[-1].append(position)
 
     def merge_contiguous_files(
         self,
@@ -598,8 +672,12 @@ if __name__ == "__main__":
     print("Starting processing rows...")
     chunk = []
 
+    document_lengths: dict[int, int] = {}
+    title_lengths: dict[int, int] = {}
+
     num_docs = 0
     cumulative_length = 0
+    cumulative_length_title = 0
 
     threads: list[AsyncResult] = []
 
@@ -609,7 +687,12 @@ if __name__ == "__main__":
             "./msmarco-docs.tsv", max_rows=max_rows
         ):
             chunk.append(row)
-            cumulative_length += len(row.line)
+            document_lengths[row.docid] = len(row.tokens)
+            title_lengths[row.docid] = len(row.tokens_title)
+
+            cumulative_length += len(row.tokens)
+            cumulative_length_title += len(row.tokens_title)
+
             num_docs += 1
             if row.docid > 0 and row.docid % block_size == 0:
                 if len(threads) == num_processes:
@@ -639,8 +722,21 @@ if __name__ == "__main__":
         pool.close()
         pool.join()
 
+    doc_info_file.close()
+
+    with open(final_dir / "document_lengths", "wb") as f:
+        pickle.dump(document_lengths, f)
+
+    with open(final_dir / "title_lengths", "wb") as f:
+        pickle.dump(title_lengths, f)
+
     average_doc_length = cumulative_length / num_docs
-    meta_data = {"average_doc_length": average_doc_length, "num_docs": num_docs}
+    average_title_length = cumulative_length_title / num_docs
+    meta_data = {
+        "average_doc_length": average_doc_length,
+        "average_title_length": average_title_length,
+        "num_docs": num_docs,
+    }
 
     with open(final_dir / "index_metadata", "wb") as f:
         pickle.dump(meta_data, f)
@@ -665,10 +761,11 @@ if __name__ == "__main__":
         for i, current_end in enumerate(
             range(length_one_stage, num_files + 1, length_one_stage)
         ):
-            pool.apply_async(
-                merge_blocks,
-                args=(current_start, current_end, i, staged_dir, blocks_dir),
-            )
+            # pool.apply_async(
+            #     merge_blocks,
+            #     args=(current_start, current_end, i, staged_dir, blocks_dir),
+            # )
+            merge_blocks(current_start, current_end, i, staged_dir, blocks_dir)
             current_start = current_end
         pool.close()
         pool.join()
@@ -701,6 +798,10 @@ if __name__ == "__main__":
 
     print(f"Finished merging blocks in {time.time() - start_merge:.4f}s")
 
+    shutil.rmtree(staged_dir)
+    shutil.rmtree(blocks_dir)
+
+    index.save_doc_info_offset(final_dir / "corpus_offset_file")
     index.save_term_index(final_dir / "term_index_file")
 
     end = time.time()

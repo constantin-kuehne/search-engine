@@ -28,6 +28,7 @@ class InvertedIndex:
         file_path_doc_info: str | Path,
         file_path_metadata: str | Path,
         file_path_document_lengths: str | Path,
+        file_path_title_lengths: str | Path,
         file_path_bodies: str | Path,
         file_path_bodies_offsets: str | Path
     ) -> None:
@@ -49,7 +50,9 @@ class InvertedIndex:
             position_list_file.fileno(), length=0, prot=mmap.PROT_READ
         )
 
-        self.mm_doc_info = mmap.mmap(doc_info_file.fileno(), length=0, prot=mmap.PROT_READ)
+        self.mm_doc_info = mmap.mmap(
+            doc_info_file.fileno(), length=0, prot=mmap.PROT_READ
+        )
 
         self.mm_bodies = mmap.mmap(bodies_file.fileno(), length=0, prot=mmap.PROT_READ)
         self.mm_bodies_offsets = mmap.mmap(bodies_offsets_file.fileno(), length=0, prot=mmap.PROT_READ)
@@ -80,6 +83,9 @@ class InvertedIndex:
                 if self.document_lengths.itemsize != 4:
                     raise RuntimeError("Machine does not have an exact 4 byte integer type")
             self.document_lengths.fromfile(f, file_bytes // 4) # uint32_t
+
+        with open(file_path_title_lengths, "rb") as f:
+            self.title_lengths = pickle.load(f)
 
     def has_phrase(self, pos_list_list: list[tuple[int]]) -> bool:
         indices = [0 for _ in range(len(pos_list_list))]
@@ -112,24 +118,39 @@ class InvertedIndex:
         self,
         doc_ids: Sequence[Sequence[int]],
         term_frequencies: Sequence[Sequence[int]],
-    ) -> tuple[list[int], list[list[int]]]:
+        term_frequencies_title: Sequence[Sequence[int]],
+    ) -> tuple[list[int], list[list[int]], list[list[int]]]:
         doc_ids = [doc_list for doc_list in doc_ids if len(doc_list) > 0]
         pointer = [0 for _ in range(len(doc_ids))]
         result_doc_ids = []
         min_heap = []
 
         for i, doc_list in enumerate(doc_ids):
-            heapq.heappush(min_heap, (doc_list[0], i, term_frequencies[i][0]))
+            heapq.heappush(
+                min_heap,
+                (
+                    doc_list[0],
+                    i,
+                    term_frequencies[i][0],
+                    term_frequencies_title[i][0],
+                ),
+            )
 
         counter_same_value = 0
         last_min = -1
+
         result_term_freqs: list[list[int]] = []
         last_term_freqs: list[int] = []
+
+        result_term_freqs_title: list[list[int]] = []
+        last_term_freqs_title: list[int] = []
 
         one_list_finished = False
 
         while min_heap:
-            current_min, current_index, term_frequency = heapq.heappop(min_heap)
+            current_min, current_index, term_frequency, term_frequency_title = (
+                heapq.heappop(min_heap)
+            )
 
             if last_min == current_min:
                 counter_same_value += 1
@@ -137,11 +158,15 @@ class InvertedIndex:
                 if one_list_finished:
                     break
                 last_term_freqs = []
+                last_term_freqs_title = []
                 counter_same_value = 0
 
             last_term_freqs.append(term_frequency)
+            last_term_freqs_title.append(term_frequency_title)
+
             if counter_same_value == len(doc_ids) - 1:
                 result_term_freqs.append(last_term_freqs)
+                result_term_freqs_title.append(last_term_freqs_title)
                 result_doc_ids.append(current_min)
 
             pointer[current_index] += 1
@@ -156,17 +181,19 @@ class InvertedIndex:
                     doc_ids[current_index][pointer[current_index]],
                     current_index,
                     term_frequencies[current_index][pointer[current_index]],
+                    term_frequencies_title[current_index][pointer[current_index]],
                 ),
             )
             last_min = current_min
-        return result_doc_ids, result_term_freqs
+        return result_doc_ids, result_term_freqs, result_term_freqs_title
 
     def intersection_phrase(
         self,
         doc_ids_per_token: list[tuple[int, ...]],
         doc_pos_per_token: list[tuple[int, ...]],
         term_frequencies: Sequence[Sequence[int]],
-    ) -> tuple[list[int], list[list[int]], Sequence[Sequence[int]]]:
+        term_frequencies_title: Sequence[Sequence[int]],
+    ) -> tuple[list[int], list[list[int]], list[list[int]], Sequence[Sequence[int]]]:
         pointer = [0 for _ in range(len(doc_ids_per_token))]
         result_doc_ids: list[int] = []
         min_heap = []
@@ -174,7 +201,13 @@ class InvertedIndex:
         for i, doc_list in enumerate(doc_ids_per_token):
             heapq.heappush(
                 min_heap,
-                (doc_list[0], i, term_frequencies[i][0], doc_pos_per_token[i][0]),
+                (
+                    doc_list[0],
+                    i,
+                    term_frequencies[i][0],
+                    term_frequencies_title[i][0],
+                    doc_pos_per_token[i][0],
+                ),
             )
 
         counter_same_value = 0
@@ -183,32 +216,47 @@ class InvertedIndex:
         result_term_freqs: list[list[int]] = []
         last_term_freqs: list[int] = []
 
+        result_term_freqs_title: list[list[int]] = []
+        last_term_freqs_title: list[int] = []
+
         result_doc_pos_offsets: list[list[int]] = []
         last_doc_pos_offsets: list[int] = []
 
+        one_list_finished = False
+
         while min_heap:
-            current_min, current_index, term_frequency, doc_pos_offset = heapq.heappop(
-                min_heap
-            )
+            (
+                current_min,
+                current_index,
+                term_frequency,
+                term_frequency_title,
+                doc_pos_offset,
+            ) = heapq.heappop(min_heap)
 
             if last_min == current_min:
                 counter_same_value += 1
             else:
+                if one_list_finished:
+                    break
                 last_term_freqs = []
+                last_term_freqs_title = []
                 last_doc_pos_offsets = []
                 counter_same_value = 0
 
             last_term_freqs.append(term_frequency)
+            last_term_freqs_title.append(term_frequency_title)
             last_doc_pos_offsets.append(doc_pos_offset)
 
             if counter_same_value == len(doc_ids_per_token) - 1:
                 result_term_freqs.append(last_term_freqs)
+                result_term_freqs_title.append(last_term_freqs_title)
                 result_doc_pos_offsets.append(last_doc_pos_offsets)
                 result_doc_ids.append(current_min)
 
             pointer[current_index] += 1
             if len(doc_ids_per_token[current_index]) <= pointer[current_index]:
                 last_min = current_min
+                one_list_finished = True
                 continue
 
             heapq.heappush(
@@ -217,22 +265,30 @@ class InvertedIndex:
                     doc_ids_per_token[current_index][pointer[current_index]],
                     current_index,
                     term_frequencies[current_index][pointer[current_index]],
+                    term_frequencies_title[current_index][pointer[current_index]],
                     doc_pos_per_token[current_index][pointer[current_index]],
                 ),
             )
             last_min = current_min
 
-        return result_doc_ids, result_term_freqs, result_doc_pos_offsets
+        return (
+            result_doc_ids,
+            result_term_freqs,
+            result_term_freqs_title,
+            result_doc_pos_offsets,
+        )
 
     def union(
         self,
         doc_ids: Sequence[Sequence[int]],
         term_frequencies: Sequence[Sequence[int]],
-    ) -> tuple[list[int], list[list[int]]]:
+        term_frequencies_title: Sequence[Sequence[int]],
+    ) -> tuple[list[int], list[list[int]], list[list[int]]]:
         num_terms = len(doc_ids)
         pointers = [0] * num_terms
         result_doc_ids = []
         result_term_freqs = []
+        result_term_freqs_title = []
         min_heap = []
 
         for i, doc_list in enumerate(doc_ids):
@@ -241,6 +297,7 @@ class InvertedIndex:
 
         last_doc_id = -1
         current_tf_vector = []
+        current_tf_vecotr_title = []
         while min_heap:
             doc_id, term_index = heapq.heappop(min_heap)
             if doc_id != last_doc_id:
@@ -250,9 +307,12 @@ class InvertedIndex:
                 last_doc_id = doc_id
                 result_doc_ids.append(doc_id)
                 current_tf_vector = [0] * num_terms
+                current_tf_vecotr_title = [0] * num_terms
 
             tf = term_frequencies[term_index][pointers[term_index]]
+            tf_title = term_frequencies_title[term_index][pointers[term_index]]
             current_tf_vector[term_index] = tf
+            current_tf_vecotr_title[term_index] = tf_title
             pointers[term_index] += 1
 
             if pointers[term_index] < len(doc_ids[term_index]):
@@ -261,18 +321,28 @@ class InvertedIndex:
 
         if last_doc_id != -1:
             result_term_freqs.append(current_tf_vector)
-        return result_doc_ids, result_term_freqs
+            result_term_freqs_title.append(current_tf_vecotr_title)
+        return result_doc_ids, result_term_freqs, result_term_freqs_title
 
     def and_statement(
         self,
         doc_list: Sequence[Sequence[int]],
         term_frequencies: Sequence[Sequence[int]],
-    ) -> tuple[Sequence[int], Sequence[Sequence[int]]]:
-        matched: tuple[Sequence[int], Sequence[Sequence[int]]] = tuple([])
+        term_frequencies_title: Sequence[Sequence[int]],
+    ) -> tuple[Sequence[int], Sequence[Sequence[int]], Sequence[Sequence[int]]]:
+        matched: tuple[
+            Sequence[int], Sequence[Sequence[int]], Sequence[Sequence[int]]
+        ] = tuple([])
         if len(doc_list) == 1:
-            matched = (doc_list[0], list(zip(*term_frequencies)))
+            matched = (
+                doc_list[0],
+                list(zip(*term_frequencies)),
+                list(zip(*term_frequencies_title)),
+            )
         elif len(doc_list) > 1:
-            matched = self.intersection(doc_list, term_frequencies)
+            matched = self.intersection(
+                doc_list, term_frequencies, term_frequencies_title
+            )
 
         return matched
 
@@ -280,27 +350,31 @@ class InvertedIndex:
         self,
         doc_list: Sequence[Sequence[int]],
         term_frequencies: Sequence[Sequence[int]],
-    ) -> tuple[list[int], list[list[int]]]:
-        matched: tuple[list[int], list[list[int]]] = tuple([])
+        term_frequencies_title: Sequence[Sequence[int]],
+    ) -> tuple[list[int], list[list[int]], list[list[int]]]:
+        matched: tuple[list[int], list[list[int]], list[list[int]]] = tuple([])
         if len(doc_list) == 1:
-            matched = (list(doc_list[0]), [list(term_frequencies[0])])
+            matched = (
+                list(doc_list[0]),
+                [list(term_frequencies[0])],
+                [list(term_frequencies_title[0])],
+            )
         elif len(doc_list) > 1:
-            matched = self.union(doc_list, term_frequencies)
+            matched = self.union(doc_list, term_frequencies, term_frequencies_title)
 
         return matched
 
     def not_statement(
         self, doc_list: Sequence[Sequence[int]], *args
-    ) -> tuple[list[int], list[list[int]]]:
-        matched: tuple[list[int], list[list[int]]] = tuple([])
+    ) -> tuple[list[int], list[list[int]], list[list[int]]]:
+        matched: tuple[list[int], list[list[int]], list[list[int]]] = tuple([])
         if len(doc_list) == 0:
-            matched = (
-                list(self.docs.keys()),
-                [[0 for _ in range(len(self.docs.keys()))]],
-            )
+            term_freqs = [[0 for _ in range(len(self.docs.keys()))]]
+            matched = (list(self.docs.keys()), term_freqs, term_freqs.copy())
         else:
             doc_ids_matched = list(OrderedSet(self.docs.keys()).difference(*doc_list))
-            matched = (doc_ids_matched, [[0 for _ in range(len(doc_ids_matched))]])
+            term_freqs = [[0 for _ in range(len(doc_ids_matched))]]
+            matched = (doc_ids_matched, term_freqs, term_freqs.copy())
 
         return matched
 
@@ -309,73 +383,111 @@ class InvertedIndex:
         docs_per_token: list[tuple[int, ...]],
         doc_pos_offset_per_token: list[tuple[int]],
         term_freqs: Sequence[Sequence[int]],
-    ) -> tuple[Sequence[int], Sequence[Sequence[int]]]:
+        term_freqs_title: Sequence[Sequence[int]],
+    ) -> tuple[Sequence[int], Sequence[Sequence[int]], Sequence[Sequence[int]]]:
         if len(docs_per_token) == 1:
-            return docs_per_token[0], term_freqs
+            return docs_per_token[0], term_freqs, term_freqs_title
 
         matched: list[int] = []
-        match_candidates, term_freqs_per_doc, pos_tokens_per_doc_candidate = (
-            self.intersection_phrase(
-                docs_per_token, doc_pos_offset_per_token, term_freqs
-            )
+        (
+            match_candidates,
+            term_freqs_per_doc,
+            term_freqs_title_per_doc,
+            pos_tokens_per_doc_candidate,
+        ) = self.intersection_phrase(
+            docs_per_token, doc_pos_offset_per_token, term_freqs, term_freqs_title
         )
 
         if len(match_candidates) == 0:
-            return matched, term_freqs_per_doc
+            return matched, term_freqs_per_doc, term_freqs_title_per_doc
 
         pos_list_tokens_per_doc: list[list[tuple[int]]] = []
-        for pos_offset_tuple in pos_tokens_per_doc_candidate:
+        pos_list_title_tokens_per_doc: list[list[tuple[int]]] = []
+        for doc_idx, pos_offset_tuple in enumerate(pos_tokens_per_doc_candidate):
             pos_list_token: list[tuple[int]] = []
-            for pos_offset in pos_offset_tuple:
+            pos_list_title_token: list[tuple[int]] = []
+            for token_idx, pos_offset in enumerate(pos_offset_tuple):
                 length_pos_list = struct.unpack(
                     "I", self.mm_position_list[pos_offset : pos_offset + INT_SIZE]
                 )[0]
-                pos_list: tuple[int] = struct.unpack(
-                    f"{length_pos_list}I",
+                pos_list_title: tuple[int] = struct.unpack(
+                    f"{term_freqs_title_per_doc[doc_idx][token_idx]}I",
                     self.mm_position_list[
                         pos_offset + INT_SIZE : pos_offset
+                        + INT_SIZE
+                        + term_freqs_title_per_doc[doc_idx][token_idx] * INT_SIZE
+                    ],
+                )
+
+                pos_list: tuple[int] = struct.unpack(
+                    f"{term_freqs_per_doc[doc_idx][token_idx]}I",
+                    self.mm_position_list[
+                        pos_offset
+                        + INT_SIZE
+                        + term_freqs_title_per_doc[doc_idx][token_idx] : pos_offset
                         + INT_SIZE
                         + length_pos_list * INT_SIZE
                     ],
                 )
+                pos_list_title_token.append(pos_list_title)
                 pos_list_token.append(pos_list)
+
+            pos_list_title_tokens_per_doc.append(pos_list_title_token)
             pos_list_tokens_per_doc.append(pos_list_token)
 
         term_freqs_per_doc_matched = []
-        for doc_id, pos_list_per_token, term_freqs_doc in zip(
-            match_candidates, pos_list_tokens_per_doc, term_freqs_per_doc
+        term_freqs_title_per_doc_matched = []
+        for doc_id, pos_list_per_token, term_freqs_doc, term_freqs_title_doc in zip(
+            match_candidates,
+            pos_list_tokens_per_doc,
+            term_freqs_per_doc,
+            term_freqs_title_per_doc,
         ):
             if self.has_phrase(
                 pos_list_per_token,
             ):
                 matched.append(doc_id)
                 term_freqs_per_doc_matched.append(term_freqs_doc)
+                term_freqs_title_per_doc_matched.append(term_freqs_title_doc)
 
-        return (matched, term_freqs_per_doc_matched)
+        return (matched, term_freqs_per_doc_matched, term_freqs_title_per_doc_matched)
 
     def evaluate_subtree(
         self, node
-    ) -> tuple[list[int], Sequence[int], Sequence[Sequence[int]]]:
+    ) -> tuple[
+        list[int], Sequence[int], Sequence[Sequence[int]], Sequence[Sequence[int]]
+    ]:
         if isinstance(node.value, SearchMode):
             if node.value == SearchMode.AND:
-                left_result_doc_freq, left_result_doc_list, left_result_term_freq = (
-                    self.evaluate_subtree(node.left)
-                )
-                right_result_doc_freq, right_result_doc_list, right_result_term_freq = (
-                    self.evaluate_subtree(node.right)
-                )
+                (
+                    left_result_doc_freq,
+                    left_result_doc_list,
+                    left_result_term_freq,
+                    left_result_term_freq_title,
+                ) = self.evaluate_subtree(node.left)
+                (
+                    right_result_doc_freq,
+                    right_result_doc_list,
+                    right_result_term_freq,
+                    right_result_term_freq_title,
+                ) = self.evaluate_subtree(node.right)
                 result_term_freq = list(left_result_term_freq)
+                result_term_freq_title = list(left_result_term_freq_title)
                 if (
                     not isinstance(node.left.value, str)
                     and not node.left.value == SearchMode.NOT
                 ):
                     result_term_freq = [result_term_freq]
+                    result_term_freq_title = [result_term_freq_title]
                 if (
                     not isinstance(node.right.value, str)
                     and not node.right.value == SearchMode.NOT
                 ):
                     right_result_term_freq = [right_result_term_freq]
+                    right_result_term_freq_title = [right_result_term_freq_title]
+
                 result_term_freq.extend(right_result_term_freq)  # pyright: ignore
+                result_term_freq_title.extend(right_result_term_freq_title)  # pyright: ignore
 
                 result_doc_freq = list(left_result_doc_freq)
                 result_doc_freq.extend(right_result_doc_freq)
@@ -384,30 +496,45 @@ class InvertedIndex:
                     *self.and_statement(
                         [left_result_doc_list, right_result_doc_list],
                         result_term_freq,  # pyright: ignore
+                        result_term_freq_title,  # pyright: ignore
                     ),
                 )
             elif node.value == SearchMode.OR:
-                left_result_doc_freq, left_result_doc_list, left_result_term_freq = (
-                    self.evaluate_subtree(node.left)
-                )
-                right_result_doc_freq, right_result_doc_list, right_result_term_freq = (
-                    self.evaluate_subtree(node.right)
-                )
+                (
+                    left_result_doc_freq,
+                    left_result_doc_list,
+                    left_result_term_freq,
+                    left_result_term_freq_title,
+                ) = self.evaluate_subtree(node.left)
+                (
+                    right_result_doc_freq,
+                    right_result_doc_list,
+                    right_result_term_freq,
+                    right_result_term_freq_title,
+                ) = self.evaluate_subtree(node.right)
                 result_term_freq = list(left_result_term_freq)
                 result_term_freq.extend(right_result_term_freq)
+
+                result_term_freq_title = list(left_result_term_freq_title)
+                result_term_freq_title.extend(right_result_term_freq_title)
 
                 result_doc_freq = list(left_result_doc_freq)
                 result_doc_freq.extend(right_result_doc_freq)
                 return (
                     result_doc_freq,
                     *self.or_statement(
-                        [left_result_doc_list, right_result_doc_list], result_term_freq
+                        [left_result_doc_list, right_result_doc_list],
+                        result_term_freq,
+                        result_term_freq_title,
                     ),
                 )
             elif node.value == SearchMode.NOT:
-                left_result_doc_freq, left_result_doc_list, result_term_freq = (
-                    self.evaluate_subtree(node.left)
-                )
+                (
+                    left_result_doc_freq,
+                    left_result_doc_list,
+                    result_term_freq,
+                    result_term_freq_title,
+                ) = self.evaluate_subtree(node.left)
                 return (
                     left_result_doc_freq,
                     *self.not_statement([left_result_doc_list]),
@@ -419,52 +546,75 @@ class InvertedIndex:
             doc_list_phrase: list[tuple[int]] = []
             pos_offset_list_phrase: list[tuple[int]] = []
             term_freqs_phrase: list[tuple[int]] = []
+            term_freqs_title_phrase: list[tuple[int]] = []
             doc_freqs_phrase: list[int] = []
             for token in tokens:
-                doc_list_per_token, pos_offset_list_per_token, term_freq_per_token = (
-                    self.get_docs_phrase(token)
-                )
+                (
+                    doc_list_per_token,
+                    pos_offset_list_per_token,
+                    term_freq_per_token,
+                    term_freq_title_per_token,
+                ) = self.get_docs_phrase(token)
                 doc_list_phrase.append(doc_list_per_token)
                 pos_offset_list_phrase.append(pos_offset_list_per_token)
                 term_freqs_phrase.append(term_freq_per_token)
+                term_freqs_title_phrase.append(term_freq_title_per_token)
                 doc_freqs_phrase.append(len(doc_list_per_token))
             return (
                 doc_freqs_phrase,
                 *self.phrase_statement(
-                    doc_list_phrase, pos_offset_list_phrase, term_freqs_phrase
+                    doc_list_phrase,
+                    pos_offset_list_phrase,
+                    term_freqs_phrase,
+                    term_freqs_title_phrase,
                 ),
             )
 
         if isinstance(node.value, str):
-            doc_list, term_frequencies = self.get_docs(node.value)
-            return [len(doc_list)], doc_list, [list(term_frequencies)]
+            doc_list, term_frequencies, term_frequencies_title = self.get_docs(
+                node.value
+            )
+            return (
+                [len(doc_list)],
+                doc_list,
+                [list(term_frequencies)],
+                [list(term_frequencies_title)],
+            )
 
         return tuple([])
 
     def query_evaluator(
         self, tokens: list[str]
-    ) -> tuple[list[int], Sequence[int], Sequence[Sequence[int]]]:
+    ) -> tuple[
+        list[int], Sequence[int], Sequence[Sequence[int]], Sequence[Sequence[int]]
+    ]:
         output_queue = shunting_yard(tokens)
         root = build_query_tree(output_queue)
-        doc_freqs, matched_doc_ids, matched_doc_freqs = self.evaluate_subtree(root)
-        return doc_freqs, matched_doc_ids, matched_doc_freqs
+        doc_freqs, matched_doc_ids, matched_term_freqs, matched_term_freqs_title = (
+            self.evaluate_subtree(root)
+        )
+        return doc_freqs, matched_doc_ids, matched_term_freqs, matched_term_freqs_title
 
     def get_docs(
         self,
         token: str,
-        idf_threshold: float = 1.5,
-    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        idf_threshold: float = 1.0,
+    ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
         res: Optional[int] = self.index.get(token, None)
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
+            print(f"{token=}, {length_term=}")
+            print(f"{self.mm_doc_id_list[res:INT_SIZE:res+INT_SIZE+length_term]}")
             res += INT_SIZE + length_term  # move to the document list
             length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
+            idf_value: float = self.calculate_idf(self.metadata["num_docs"], length_doc_list)
+            print(f"{token=}, {length_doc_list=}, {idf_value=}")
             if (
-                self.calculate_idf(self.metadata["num_docs"], length_doc_list)
+                idf_value
                 < idf_threshold
             ):
                 empty_tuple: tuple[int] = tuple([])
-                return empty_tuple, empty_tuple
+                return empty_tuple, empty_tuple, empty_tuple
 
             doc_list = struct.unpack(
                 f"{length_doc_list}I",
@@ -472,7 +622,7 @@ class InvertedIndex:
                     res + INT_SIZE : res + INT_SIZE + length_doc_list * INT_SIZE
                 ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
             )
-            term_frequencies = struct.unpack(
+            term_frequencies_title = struct.unpack(
                 f"{length_doc_list}I",
                 self.mm_doc_id_list[
                     res + INT_SIZE + length_doc_list * INT_SIZE : res
@@ -480,57 +630,76 @@ class InvertedIndex:
                     + length_doc_list * INT_SIZE * 2
                 ],
             )
-            return doc_list, term_frequencies
-        else:
-            # add the empty set if term not found, so we give no results
-            # the correct AND semantic
-            empty_tuple: tuple[int] = tuple([])
-            return empty_tuple, empty_tuple
-
-    def calculate_idf(self, N: int, doc_freq: int) -> float:
-        return math.log((N - doc_freq + 0.5) / (doc_freq + 0.5))
-
-    def get_docs_phrase(
-        self,
-        token: str,
-    ) -> tuple[tuple[int], tuple[int], tuple[int]]:
-        res: Optional[int] = self.index.get(token, None)
-        if res is not None:
-            length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
-            res += INT_SIZE + length_term  # move to the document list
-            length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
-            doc_list = struct.unpack(
-                f"{length_doc_list}I",
-                self.mm_doc_id_list[
-                    res + INT_SIZE : res + INT_SIZE + length_doc_list * INT_SIZE
-                ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
-            )
             term_frequencies = struct.unpack(
                 f"{length_doc_list}I",
-                self.mm_doc_id_list[
-                    res + INT_SIZE + length_doc_list * INT_SIZE : res
-                    + INT_SIZE
-                    + length_doc_list * INT_SIZE * 2
-                ],
-            )
-            pos_offset_list: tuple[int] = struct.unpack(
-                f"{length_doc_list}Q",
                 self.mm_doc_id_list[
                     res + INT_SIZE + length_doc_list * INT_SIZE * 2 : res
                     + INT_SIZE
                     + length_doc_list
                     * INT_SIZE
-                    * 2  # move to position offset list: times 2 because we have to skip doc id list and term frequency list
-                    + length_doc_list * LONG_SIZE
+                    * 3  # move to term frequency list: times 2 because we have to skip doc id list and title term frequency list
                 ],
             )
 
-            return doc_list, pos_offset_list, term_frequencies
+            return doc_list, term_frequencies, term_frequencies_title
         else:
             # add the empty set if term not found, so we give no results
             # the correct AND semantic
             empty_tuple: tuple[int] = tuple([])
             return empty_tuple, empty_tuple, empty_tuple
+
+    def get_docs_phrase(
+        self,
+        token: str,
+    ) -> tuple[tuple[int], tuple[int], tuple[int], tuple[int]]:
+        res: Optional[int] = self.index.get(token, None)
+        if res is not None:
+            length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
+            res += INT_SIZE + length_term  # move to the document list
+            length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
+            doc_list = struct.unpack(
+                f"{length_doc_list}I",
+                self.mm_doc_id_list[
+                    res + INT_SIZE : res + INT_SIZE + length_doc_list * INT_SIZE
+                ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
+            )
+            term_frequencies_title = struct.unpack(
+                f"{length_doc_list}I",
+                self.mm_doc_id_list[
+                    res + INT_SIZE + length_doc_list * INT_SIZE : res
+                    + INT_SIZE
+                    + length_doc_list * INT_SIZE * 2
+                ],
+            )
+            term_frequencies = struct.unpack(
+                f"{length_doc_list}I",
+                self.mm_doc_id_list[
+                    res + INT_SIZE + length_doc_list * INT_SIZE * 2 : res
+                    + INT_SIZE
+                    + length_doc_list
+                    * INT_SIZE
+                    * 3  # move to term frequency list: times 2 because we have to skip doc id list and title term frequency list
+                ],
+            )
+
+            pos_offset_list: tuple[int] = struct.unpack(
+                f"{length_doc_list}Q",
+                self.mm_doc_id_list[
+                    res + INT_SIZE + length_doc_list * INT_SIZE * 3 : res
+                    + INT_SIZE
+                    + length_doc_list
+                    * INT_SIZE
+                    * 3  # move to position offset list: times 2 because we have to skip doc id list and term frequency list
+                    + length_doc_list * LONG_SIZE
+                ],
+            )
+
+            return doc_list, pos_offset_list, term_frequencies, term_frequencies_title
+        else:
+            # add the empty set if term not found, so we give no results
+            # the correct AND semantic
+            empty_tuple: tuple[int] = tuple([])
+            return empty_tuple, empty_tuple, empty_tuple, empty_tuple
 
     def get_doc_info(self, doc_id: int, snippet_length: int) -> DocumentInfo:
         offset = self.docs[doc_id]
@@ -556,6 +725,30 @@ class InvertedIndex:
             title=title,
             body_snippet=self.mm_bodies[bodies_offset:bodies_end_offset].decode("utf-8", errors="replace")
         )
+
+    def calculate_idf(self, N: int, doc_freq: int) -> float:
+        print(f"{N=}, {doc_freq=}")
+        return math.log((N - doc_freq + 0.5) / (doc_freq + 0.5))
+
+    def calculate_term_weight(
+        self,
+        tf: int,
+        doc_length: int,
+        avg_length: float,
+        b: float = 0.75,
+    ) -> float:
+        return tf / (1 - b + b * (doc_length / avg_length))
+
+    def fielded_bm25_score(
+        self,
+        idf_tokens: list[float],
+        tf_tokens: list[float],
+        k: float = 1.6,
+    ) -> float:
+        score = 0
+        for idf_token, tf_token in zip(idf_tokens, tf_tokens):
+            score += idf_token * (tf_token * (k + 1)) / (tf_token + k)
+        return score
 
     def bm25_score(
         self,
@@ -584,6 +777,7 @@ class InvertedIndex:
 
         doc_list: list[tuple[int, ...]] = []
         term_freqs: list[tuple[int, ...]] = []
+        term_freqs_title: list[tuple[int, ...]] = []
         doc_freqs: list[int] = []
         match mode:
             case SearchMode.PHRASE:
@@ -593,49 +787,56 @@ class InvertedIndex:
                         doc_list_per_token,
                         pos_offset_list_per_token,
                         term_freq_per_token,
+                        term_freq_title_per_token,
                     ) = self.get_docs_phrase(token)
                     doc_list.append(doc_list_per_token)
                     pos_offset_list.append(pos_offset_list_per_token)
                     term_freqs.append(term_freq_per_token)
+                    term_freqs_title.append(term_freq_title_per_token)
                     doc_freqs.append(len(doc_list_per_token))
             case SearchMode.AND | SearchMode.OR | SearchMode.NOT:
                 for token in tokens:
-                    doc_list_per_token, term_freq_per_token = self.get_docs(token)
+                    (
+                        doc_list_per_token,
+                        term_freq_per_token,
+                        term_freq_title_per_token,
+                    ) = self.get_docs(token)
                     doc_list.append(doc_list_per_token)
                     term_freqs.append(term_freq_per_token)
+                    term_freqs_title.append(term_freq_title_per_token)
                     doc_freqs.append(len(doc_list_per_token))
             case SearchMode.QUERY_EVALUATOR:
                 pass
             case _:
                 raise ValueError(f"Unsupported search mode: {mode}")
 
+        print(f"{tokens=}: {term_freqs=} | {term_freqs_title=} | {doc_list=}\n")
         matched_doc_ids: Sequence[int] = []
         matched_term_freqs: Sequence[Sequence[int]] = []
         if mode == SearchMode.AND:
-            matched_doc_ids, matched_term_freqs = self.and_statement(
-                doc_list, term_freqs
+            matched_doc_ids, matched_term_freqs, matched_term_freqs_title = (
+                self.and_statement(doc_list, term_freqs, term_freqs_title)
             )
         elif mode == SearchMode.OR:
-            matched_doc_ids, matched_term_freqs = self.or_statement(
-                doc_list, term_freqs
+            matched_doc_ids, matched_term_freqs, matched_term_freqs_title = (
+                self.or_statement(doc_list, term_freqs, term_freqs_title)
             )
         elif mode == SearchMode.NOT:
-            matched_doc_ids, matched_term_freqs = self.not_statement(doc_list)
+            matched_doc_ids, matched_term_freqs, matched_term_freqs_title = (
+                self.not_statement(doc_list)
+            )
         elif mode == SearchMode.PHRASE:
-            matched_doc_ids, matched_term_freqs = self.phrase_statement(
-                doc_list, pos_offset_list, term_freqs
+            matched_doc_ids, matched_term_freqs, matched_term_freqs_title = (
+                self.phrase_statement(
+                    doc_list, pos_offset_list, term_freqs, term_freqs_title
+                )
             )
         elif mode == SearchMode.QUERY_EVALUATOR:
-            doc_freqs, matched_doc_ids, matched_term_freqs = self.query_evaluator(
-                tokens
+            doc_freqs, matched_doc_ids, matched_term_freqs, matched_term_freqs_title = (
+                self.query_evaluator(tokens)
             )
 
-        bm25_score = partial(
-            self.bm25_score,
-            df_tokens=doc_freqs,
-            N=self.metadata["num_docs"],
-            avg_length=self.metadata["average_doc_length"],
-        )
+        results: list[tuple[float, SearchResult]] = []
 
         def flatten(items: Sequence[Sequence[int] | int]) -> list[int]:
             flat_list: list[int] = []
@@ -651,12 +852,63 @@ class InvertedIndex:
 
         if len(matched_term_freqs) == 1 and len(matched_doc_ids) != 1:
             matched_term_freqs = list(zip(*matched_term_freqs))
+
         assert len(matched_doc_ids) == len(matched_term_freqs)
-        for doc_id, term_freqs_token in zip(matched_doc_ids, matched_term_freqs):
+
+        idf_per_token = [
+            self.calculate_idf(self.metadata["num_docs"], df) for df in doc_freqs
+        ]
+
+        avg_doc_length = self.metadata["average_doc_length"]
+        calculate_term_weight_body = partial(
+            self.calculate_term_weight, avg_length=avg_doc_length
+        )
+        avg_title_length = self.metadata["average_title_length"]
+        calculate_term_weight_title = partial(
+            self.calculate_term_weight, avg_length=avg_title_length
+        )
+
+        for doc_id, term_freqs_token, term_freqs_token_title in zip(
+            matched_doc_ids, matched_term_freqs, matched_term_freqs_title
+        ):
             term_freqs_token = flatten(term_freqs_token)
+            term_freqs_token_title = flatten(term_freqs_token_title)
 
             doc_length = self.document_lengths[doc_id]
-            score = bm25_score(tf_tokens=term_freqs_token, doc_length=doc_length)
+            tilte_length = self.title_lengths[doc_id]
+
+            term_weights_body = [
+                calculate_term_weight_body(
+                    tf=tf,
+                    doc_length=doc_length,
+                )
+                for tf in term_freqs_token
+            ]
+
+            term_weights_title = [
+                calculate_term_weight_title(
+                    tf=tf,
+                    doc_length=tilte_length,
+                )
+                for tf in term_freqs_token_title
+            ]
+
+            print(f"{term_weights_body=}")
+            print(f"{term_weights_title=}\n")
+
+            
+            weight_title = 2.0
+            term_weights = [
+                body_weight + title_weight * weight_title
+                for body_weight, title_weight in zip(
+                    term_weights_body, term_weights_title
+                )
+            ]
+
+            score = self.fielded_bm25_score(
+                idf_tokens=idf_per_token,
+                tf_tokens=term_weights,
+            )
 
             result_candidates.append((score, doc_id))
 
