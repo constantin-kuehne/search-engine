@@ -1,8 +1,8 @@
 import argparse
+import readline  # noqa: F401 to enable arrow key history navigation
 import time
 from pathlib import Path
 from shutil import get_terminal_size
-import readline  # noqa: F401 to enable arrow key history navigation
 
 import search_engine
 from search_engine.inverted_index import SearchMode
@@ -44,6 +44,7 @@ if __name__ == "__main__":
         final_dir / "doc_info_file",
         final_dir / "index_metadata",
         final_dir / "document_lengths",
+        final_dir / "title_lengths",
     )
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")

@@ -2,6 +2,7 @@ import csv
 import mmap
 import os
 import pickle
+import shutil
 import struct
 import sys
 import time
@@ -64,6 +65,8 @@ class InvertedIndexIngestion:
             doc_id_file.write(term_bytes)
             # document frequency
             doc_id_file.write(struct.pack("I", len(doc_list)))
+            if term == "yet":
+                print(f"Writing term: {term} with doc freq {len(doc_list)}")
             # document list
             doc_id_file.write(struct.pack(f"{len(doc_list)}I", *doc_list))
 
@@ -87,6 +90,7 @@ class InvertedIndexIngestion:
                     )
                 )
 
+            print(f"{term}: {term_frequencies_title} | {term_frequencies} | {doc_list}")
             assert len(document_index) == len(doc_list)
 
             # term frequencies title
@@ -245,10 +249,16 @@ class InvertedIndexIngestion:
                 mm_files[index], offset_doc_list
             )
 
+            if current_min == "yet":
+                print(
+                    f"START: {current_min} from files {min_indices} with doc list {struct.unpack(f'{length_doc_list}I', mm_files[index][offset_doc_list + INT_SIZE : offset_doc_list + INT_SIZE + INT_SIZE * length_doc_list])}"
+                )
+
             bytes_in_file = mm_files[index][
                 pos : offset_doc_list + INT_SIZE + length_doc_list * INT_SIZE
             ]
             doc_id_file_pos = doc_id_file.tell()
+
             self.term_index[current_min] = doc_id_file_pos
 
             bytes_position_list_index = mm_files[
@@ -400,6 +410,11 @@ class InvertedIndexIngestion:
 
             doc_id_file_end_pos = doc_id_file.tell()
 
+            if current_min == "yet":
+                print(
+                    f"Merging term: {current_min} at position {doc_id_file_pos} write length {length_doc_list}"
+                )
+
             # go back and write the merged length of the doc list
             doc_id_file.seek(doc_id_file_pos + INT_SIZE + length_term)
             doc_id_file.write(struct.pack("I", length_doc_list))
@@ -542,19 +557,21 @@ if __name__ == "__main__":
     print("Starting indexing...")
     start = time.time()
 
-    block_size = 500
     block_num = 0
 
-    max_rows = 15_000
-
-    num_processes = (os.cpu_count() or 6) - 2
+    block_size = 10
+    max_rows = 10
+    num_processes = 1
 
     print("Starting processing rows...")
     chunk = []
 
     document_lengths: dict[int, int] = {}
+    title_lengths: dict[int, int] = {}
+
     num_docs = 0
     cumulative_length = 0
+    cumulative_length_title = 0
 
     with Pool(processes=num_processes) as pool:
         print(f"Starting processing rows with a pool of {num_processes} processes...")
@@ -563,7 +580,11 @@ if __name__ == "__main__":
         ):
             chunk.append(row)
             document_lengths[row.docid] = len(row.tokens)
+            title_lengths[row.docid] = len(row.tokens_title)
+
             cumulative_length += len(row.tokens)
+            cumulative_length_title += len(row.tokens_title)
+
             num_docs += 1
             if row.docid > 0 and row.docid % block_size == 0:
                 pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir))
@@ -589,8 +610,16 @@ if __name__ == "__main__":
     with open(final_dir / "document_lengths", "wb") as f:
         pickle.dump(document_lengths, f)
 
+    with open(final_dir / "title_lengths", "wb") as f:
+        pickle.dump(title_lengths, f)
+
     average_doc_length = cumulative_length / num_docs
-    meta_data = {"average_doc_length": average_doc_length, "num_docs": num_docs}
+    average_title_length = cumulative_length_title / num_docs
+    meta_data = {
+        "average_doc_length": average_doc_length,
+        "average_title_length": average_title_length,
+        "num_docs": num_docs,
+    }
 
     with open(final_dir / "index_metadata", "wb") as f:
         pickle.dump(meta_data, f)
@@ -609,10 +638,11 @@ if __name__ == "__main__":
         for i, current_end in enumerate(
             range(length_one_stage, num_files + 1, length_one_stage)
         ):
-            pool.apply_async(
-                merge_blocks,
-                args=(current_start, current_end, i, staged_dir, blocks_dir),
-            )
+            # pool.apply_async(
+            #     merge_blocks,
+            #     args=(current_start, current_end, i, staged_dir, blocks_dir),
+            # )
+            merge_blocks(current_start, current_end, i, staged_dir, blocks_dir)
             current_start = current_end
         pool.close()
         pool.join()
@@ -644,6 +674,9 @@ if __name__ == "__main__":
     )
 
     print(f"Finished merging blocks in {time.time() - start_merge:.4f}s")
+
+    shutil.rmtree(staged_dir)
+    shutil.rmtree(blocks_dir)
 
     index.save_doc_info_offset(final_dir / "corpus_offset_file")
     index.save_term_index(final_dir / "term_index_file")
