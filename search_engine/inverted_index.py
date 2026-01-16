@@ -648,7 +648,7 @@ class InvertedIndex:
         trigrams = get_trigrams_from_token(original_token)
         num_trigrams: int = len(trigrams)
         if num_trigrams == 0:
-            return original_token
+            return [original_token]
 
         possible_replacements: list[set[tuple[str, int]]] = []
         for trigram in trigrams:
@@ -683,16 +683,24 @@ class InvertedIndex:
 
         return result
 
-    def get_docs(
+    def query_index_with_spelling_correction(
         self,
-        token: str,
-        idf_threshold: float = 1.0,
-    ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+        token: str
+    ) -> Optional[int]:
         res: Optional[int] = self.index.get(token, None)
 
         if res is None:
             token = self.correct_spelling(token, 10, 1)[0]
             res = self.index.get(token, None)
+
+        return res
+
+    def get_docs(
+        self,
+        token: str,
+        idf_threshold: float = 1.0,
+    ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+        res: Optional[int] = self.query_index_with_spelling_correction(token)
 
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
@@ -742,7 +750,7 @@ class InvertedIndex:
         self,
         token: str,
     ) -> tuple[tuple[int], tuple[int], tuple[int], tuple[int]]:
-        res: Optional[int] = self.index.get(token, None)
+        res: Optional[int] = self.query_index_with_spelling_correction(token)
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
             res += INT_SIZE + length_term  # move to the document list
