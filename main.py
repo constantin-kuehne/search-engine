@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    final_dir = Path("./final_little/")
+    final_dir = Path("./final/")
 
     print("Loading inverted index from disk...")
     start = time.time()
@@ -40,11 +40,13 @@ if __name__ == "__main__":
         final_dir / "doc_id_file_merged_final",
         final_dir / "position_list_file_merged_final",
         final_dir / "term_index_file",
-        final_dir / "corpus_offset_file",
+        final_dir / "doc_info_offsets",
         final_dir / "doc_info_file",
         final_dir / "index_metadata",
         final_dir / "document_lengths",
         final_dir / "title_lengths",
+        final_dir / "bodies",
+        final_dir / "bodies_offsets",
     )
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")
@@ -59,6 +61,7 @@ if __name__ == "__main__":
                 query,
                 mode=args.mode,
                 num_return=args.num_return,
+                snippet_length=args.length_body
             )
             print(f"We found {num_results} results matching your query.")
             print(f"{min(args.num_return, num_results)} of them are:")
@@ -69,7 +72,7 @@ if __name__ == "__main__":
                 print(
                     f"Score: {score} - DocId: {search_result.original_docid} ({search_result.url}) - {search_result.title}"
                 )
-                # print(f"Body ({args.length_body} chars): {search_result.body}")
+                print(f"Body ({args.length_body} chars): {search_result.body_snippet}")
 
             end = time.time()
             print(f"\nSearch took {end - start:.4f} seconds.")

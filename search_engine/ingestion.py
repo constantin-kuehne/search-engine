@@ -8,8 +8,11 @@ import sys
 import time
 from io import BufferedReader
 from multiprocessing import Pool
+from multiprocessing.pool import AsyncResult
 from pathlib import Path
 from typing import Generator, NamedTuple
+from array import array
+from shutil import copyfileobj
 
 import search_engine
 from search_engine.preprocessing import tokenize_text
@@ -33,24 +36,49 @@ class InvertedIndexIngestion:
 
         # simplemma + woosh
 
-        self.doc_info_offset: dict[int, int] = {}
         self.term_index: dict[str, int] = {}
+        self.document_lengths: array = array('I')
+        if self.document_lengths.itemsize != 4:
+            self.document_lengths = array('L')
+            if self.document_lengths.itemsize != 4:
+                raise RuntimeError("Machine does not have an exact 4 byte integer type")
+
+        self.doc_info_offset: array = array('I')
+        if self.doc_info_offset.itemsize != 4:
+            self.doc_info_offset = array('L')
+            if self.doc_info_offset.itemsize != 4:
+                raise RuntimeError("Machine does not have an exact 4 byte integer type")
 
     def save_to_disk(
         self,
         file_path_doc_id: str | Path,
         file_path_position_list: str | Path,
+        file_path_document_lengths: str | Path,
+        file_path_doc_info_offset: str | Path
     ) -> None:
         if isinstance(file_path_doc_id, str):
             file_path_doc_id = Path(file_path_doc_id)
         if isinstance(file_path_position_list, str):
             file_path_position_list = Path(file_path_position_list)
+        if isinstance(file_path_document_lengths, str):
+            file_path_document_lengths = Path(file_path_document_lengths)
+        if isinstance(file_path_doc_info_offset, str):
+            file_path_doc_info_offset = Path(file_path_doc_info_offset)
 
         file_path_doc_id.parent.mkdir(parents=True, exist_ok=True)
         file_path_position_list.parent.mkdir(parents=True, exist_ok=True)
+        file_path_document_lengths.parent.mkdir(parents=True, exist_ok=True)
 
-        doc_id_file = open(file_path_doc_id, "wb")
+        doc_id_file = open(file_path_doc_id, mode="wb")
         position_list_file = open(file_path_position_list, mode="wb")
+        document_length_file = open(file_path_document_lengths, mode="wb")
+        doc_info_offset_file = open(file_path_doc_info_offset, mode="wb")
+
+        document_length_file.write(self.document_lengths)
+        document_length_file.close()
+
+        doc_info_offset_file.write(self.doc_info_offset)
+        doc_info_offset_file.close()
 
         sorted_index_keys = sorted(self.index.keys())
         for term in sorted_index_keys:
@@ -117,10 +145,6 @@ class InvertedIndexIngestion:
 
         doc_id_file.close()
         position_list_file.close()
-
-    def save_doc_info_offset(self, file_path_corpus_offset: str | Path):
-        with open(file_path_corpus_offset, "wb") as f:
-            pickle.dump(self.doc_info_offset, f)
 
     def save_term_index(self, file_path_term_index: str | Path):
         with open(file_path_term_index, "wb") as f:
@@ -316,7 +340,19 @@ class InvertedIndexIngestion:
             if file_positions[index] >= mm_files[index].size():
                 file_ended[index] = True
 
-            doc_id_file.write(bytes_in_file)
+            for index in min_indices[1:]:
+                pos = file_positions[index]
+
+                offset_doc_list_local = pos + INT_SIZE + length_term
+                length_doc_list_local: int = get_length_from_bytes(
+                    mm_files[index], offset_doc_list_local
+                )
+                length_doc_list += length_doc_list_local
+
+            doc_id_file.write(bytes_in_file[0 : INT_SIZE + length_term])
+            doc_id_file.write(struct.pack("I", length_doc_list))
+
+            doc_id_file.write(bytes_in_file[INT_SIZE + INT_SIZE + length_term :])
             position_list_file.write(bytes_position_list)
 
             for index in min_indices[1:]:
@@ -379,7 +415,6 @@ class InvertedIndexIngestion:
                 term_frequencies_title += term_frequencies_title_local
                 term_frequencies += term_frequencies_local
 
-                length_doc_list += length_doc_list_local
                 file_positions[index] = (
                     offset_doc_list_local
                     + INT_SIZE
@@ -408,18 +443,6 @@ class InvertedIndexIngestion:
                 struct.pack(f"{len(offsets_pos_list)}Q", *offsets_pos_list)
             )
 
-            doc_id_file_end_pos = doc_id_file.tell()
-
-            if current_min == "yet":
-                print(
-                    f"Merging term: {current_min} at position {doc_id_file_pos} write length {length_doc_list}"
-                )
-
-            # go back and write the merged length of the doc list
-            doc_id_file.seek(doc_id_file_pos + INT_SIZE + length_term)
-            doc_id_file.write(struct.pack("I", length_doc_list))
-            doc_id_file.seek(doc_id_file_end_pos)
-
         for file_handle in file_handles:
             file_handle.close()
 
@@ -433,7 +456,9 @@ class InvertedIndexIngestion:
     def add_document(
         self, doc_id: int, tokens: list[str], tokens_title: list[str]
     ) -> None:
+        self.document_lengths.append(len(tokens))
         length = len(tokens) + len(tokens_title)
+        
         for position in range(length):
             if position < len(tokens_title):
                 term = tokens_title[position]
@@ -449,30 +474,96 @@ class InvertedIndexIngestion:
                         position_list_list_title.append([position])
                     else:
                         position_list_list_title[-1].append(position)
-            else:
-                position -= len(tokens_title)
-                term = tokens[position]
-                if term not in self.index:
-                    self.index[term] = ([doc_id], [[position]], [[]])
-                else:
-                    doc_list, position_list_list, position_list_list_title = self.index[
-                        term
-                    ]
-                    if doc_list[-1] != doc_id:
-                        doc_list.append(doc_id)
-                        position_list_list.append([position])
-                        position_list_list_title.append([])
-                    else:
-                        position_list_list[-1].append(position)
 
+    def merge_contiguous_files(
+        self,
+        dest_path: str | Path,
+        src_path_stem: str | Path,
+        src_filename_prefix: str,
+        num_blocks: int
+    ) -> None:
+        with open(dest_path, mode='wb') as dest:
+            for source_path in [src_path_stem / (src_filename_prefix + str(block_id)) for block_id in range(num_blocks)]:
+                with open(source_path, mode='rb') as source:
+                    copyfileobj(source, dest)
+
+    def merge_offsets(
+            self,
+            dest_path: str | Path,
+            src_path_stem: str | Path,
+            src_filename_prefix: str,
+            num_blocks: int,
+            INT_SIZE: int
+    ) -> None:
+        if INT_SIZE != 4 and INT_SIZE != 8:
+            raise RuntimeError("Not implemented yet!")
+
+        if INT_SIZE == 4:
+            wanted_array_format_char = 'I'
+            fallback_array_format_char = 'L'
+        if INT_SIZE == 8:
+            wanted_array_format_char = 'L'
+            fallback_array_format_char = 'Q'
+
+        with open(dest_path, mode='wb') as dest:
+            with open(src_path_stem / (src_filename_prefix + '0'), mode='rb') as source:
+                copyfileobj(source, dest)
+                source.seek(-INT_SIZE, os.SEEK_END)
+                last_chunk_highest_offset: int = int.from_bytes(source.peek(4), signed=False, byteorder='little') # this is the offset at which the next chunk starts
+
+            temp_array: array = array(wanted_array_format_char)
+            if temp_array.itemsize != INT_SIZE:
+                temp_array = array(fallback_array_format_char)
+                if temp_array.itemsize != INT_SIZE:
+                    raise RuntimeError(f"Machine does not have an exact {INT_SIZE} byte integer type")
+
+            for source_path in [src_path_stem / (src_filename_prefix + str(block_id)) for block_id in range(1, num_blocks)]:
+                with open(source_path, mode='rb') as source:
+                    file_size: int = os.path.getsize(source_path)
+                    num_items: int = file_size // INT_SIZE
+                    temp_array.fromfile(source, num_items)
+                    for i in range(0, num_items):
+                        temp_array[i] = temp_array[i] + last_chunk_highest_offset
+
+                    last_chunk_highest_offset = temp_array[-1]
+                    dest.seek(-INT_SIZE, os.SEEK_CUR) # overwrite the last index written in the last block (the first index of this block), as array.tofile writes the full array
+                    temp_array.tofile(dest)
+                    temp_array.clear()
+
+    def merge_doc_info_offsets(
+        self,
+        dest_path: str | Path,
+        src_path_stem: str | Path,
+        src_filename_prefix: str,
+        num_blocks: int
+    ) -> None:
+        self.merge_offsets(
+            dest_path,
+            src_path_stem,
+            src_filename_prefix,
+            num_blocks,
+            4
+        )
+
+    def merge_bodies_offsets(
+            self,
+            dest_path: str | Path,
+            src_path_stem: str | Path,
+            src_filename_prefix: str,
+            num_blocks: int
+    ) -> None:
+        self.merge_offsets(
+            dest_path,
+            src_path_stem,
+            src_filename_prefix,
+            num_blocks,
+            8
+        )
 
 class PROCESSED_ROW(NamedTuple):
     docid: int
-    original_docid: str
-    url: str
-    title: str
-    tokens: list[str]
-    tokens_title: list[str]
+    # tokens: list[str]
+    line: str
 
 
 def process_data(
@@ -489,11 +580,7 @@ def process_data(
             if max_rows is not None and i >= max_rows:
                 break
 
-            row = next(csv.reader([line], delimiter="\t"))
-            tokens = tokenize_text(row[3])
-            tokens_title = tokenize_text(row[2])
-
-            yield pos, PROCESSED_ROW(i, row[0], row[1], row[2], tokens, tokens_title)
+            yield pos, PROCESSED_ROW(i, line)
 
             pos = file.tell()
             line = file.readline()
@@ -503,12 +590,36 @@ def process_data(
 def process_chunk(chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path) -> None:
     local_index = InvertedIndexIngestion()
 
-    for row in chunk:
-        local_index.add_document(row.docid, row.tokens, row.tokens_title)
+    doc_info_file = open(blocks_dir / f"doc_info_file_{block_num}", "wb")
+    bodies_file = open(blocks_dir / f"bodies_{block_num}", "wb")
+    bodies_offsets_file = open(blocks_dir / f"bodies_offsets_{block_num}", "wb")
+    bodies_file_pos = 0
+
+    for doc in chunk:
+        row: list[str] = next(csv.reader([doc.line], delimiter="\t"))
+        tokens: list[str] = tokenize_text(row[3])
+
+        local_index.add_document(doc.docid, tokens)
+        local_index.doc_info_offset.append(doc_info_file.tell())
+        doc_info_file.write(
+            "\t".join([row[0], row[1], row[2]]).encode("utf-8")
+        )
+        encoded_body = row[3].encode("utf-8")
+        bodies_file.write(encoded_body)
+        bodies_offsets_file.write(struct.pack("Q", bodies_file_pos))
+        bodies_file_pos += len(encoded_body)
+
+    # append the current index once more, i.e., the index directly after all values from this chunk (like C++ end() iterator)
+    # this is the index at which the next chunk starts and is used during the merge
+    local_index.doc_info_offset.append(doc_info_file.tell())
+    bodies_offsets_file.write(struct.pack("Q", bodies_file_pos))
+    doc_info_file.close()
 
     local_index.save_to_disk(
         blocks_dir / f"doc_id_files/doc_id_file_block_{block_num}",
         blocks_dir / f"position_list_files/position_list_file_block_{block_num}",
+        blocks_dir / f"document_lengths_{block_num}",
+        blocks_dir / f"doc_info_offsets_{block_num}"
     )
     del local_index
 
@@ -531,13 +642,9 @@ def merge_blocks(
 
 
 if __name__ == "__main__":
-    # blocks_dir = Path("./blocks/")
-    # staged_dir = Path("./staged/")
-    # final_dir = Path("./final/")
-
-    blocks_dir = Path("./blocks_little/")
-    staged_dir = Path("./staged_little/")
-    final_dir = Path("./final_little/")
+    blocks_dir = Path("./blocks/")
+    staged_dir = Path("./staged/")
+    final_dir = Path("./final/")
 
     blocks_dir.mkdir(parents=True, exist_ok=True)
     (blocks_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
@@ -549,19 +656,18 @@ if __name__ == "__main__":
 
     final_dir.mkdir(parents=True, exist_ok=True)
 
-    path_doc_info = final_dir / "doc_info_file"
-    doc_info_file = path_doc_info.open("wb")
-
     index = InvertedIndexIngestion()
 
     print("Starting indexing...")
     start = time.time()
 
+    block_size = 5000
     block_num = 0
 
-    block_size = 10
-    max_rows = 10
-    num_processes = 1
+    # max_rows = None
+    max_rows = 50000
+
+    num_processes: int = (os.cpu_count() or 6) - 2
 
     print("Starting processing rows...")
     chunk = []
@@ -572,6 +678,8 @@ if __name__ == "__main__":
     num_docs = 0
     cumulative_length = 0
     cumulative_length_title = 0
+
+    threads: list[AsyncResult] = []
 
     with Pool(processes=num_processes) as pool:
         print(f"Starting processing rows with a pool of {num_processes} processes...")
@@ -587,15 +695,24 @@ if __name__ == "__main__":
 
             num_docs += 1
             if row.docid > 0 and row.docid % block_size == 0:
-                pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir))
+                if len(threads) == num_processes:
+                    has_ready_thread: bool = False
+                    current_index: int = 0
+                    while not has_ready_thread:
+                        if threads[current_index].ready():
+                            has_ready_thread = True
+                            break
+                        current_index += 1
+                        if current_index == num_processes:
+                            current_index = 0
+                            time.sleep(1)
+
+                    threads[current_index] = pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir))
+                else:
+                    threads.append(pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir)))
 
                 chunk = []
                 block_num += 1
-
-            index.doc_info_offset[row.docid] = doc_info_file.tell()
-            doc_info_file.write(
-                "\t".join([row.original_docid, row.url, row.title]).encode("utf-8")
-            )
 
         if chunk:
             pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir))
@@ -631,6 +748,12 @@ if __name__ == "__main__":
 
     num_files = len(os.listdir(blocks_dir / "doc_id_files/"))
     length_one_stage = min(num_processes, num_files)
+
+    index.merge_contiguous_files(final_dir / "document_lengths", blocks_dir, "document_lengths_", num_files)
+    index.merge_contiguous_files(final_dir / "doc_info_file", blocks_dir, "doc_info_file_", num_files)
+    index.merge_contiguous_files(final_dir / "bodies", blocks_dir, "bodies_", num_files)
+    index.merge_doc_info_offsets(final_dir / "doc_info_offsets", blocks_dir, "doc_info_offsets_", num_files)
+    index.merge_bodies_offsets(final_dir / "bodies_offsets", blocks_dir, "bodies_offsets_", num_files)
 
     current_start = 0
     with Pool(processes=num_processes) as pool:
