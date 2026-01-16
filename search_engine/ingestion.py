@@ -18,7 +18,7 @@ from typing import Generator, NamedTuple
 import search_engine
 from search_engine.preprocessing import tokenize_text
 from search_engine.utils import (INT_SIZE, LAST_UNICODE_CODE_POINT, LONG_SIZE,
-                                 POSTING, get_length_from_bytes)
+                                 POSTING, get_length_from_bytes, get_trigrams_from_token)
 
 csv.field_size_limit(sys.maxsize)
 
@@ -56,7 +56,8 @@ class InvertedIndexIngestion:
             if self.doc_info_offset.itemsize != 4:
                 raise RuntimeError("Machine does not have an exact 4 byte integer type")
 
-        self.trigram_to_token: dict[str, set[str]] = {}
+        # trigram -> tokens and number of trigrams in token
+        self.trigram_to_tokens: dict[str, set[tuple[str, int]]] = {}
 
     def save_to_disk(
         self,
@@ -162,8 +163,8 @@ class InvertedIndexIngestion:
         del self.index
         self.index = {}
 
-        del self.trigram_to_token
-        self.trigram_to_token = {}
+        del self.trigram_to_tokens
+        self.trigram_to_tokens = {}
 
         doc_id_file.close()
         position_list_file.close()
@@ -220,74 +221,42 @@ class InvertedIndexIngestion:
             offsets_pos_list,
         )
 
-    def process_trigrams_in_token(
-        self,
-        token: str
-    ):
-        trigrams: set[str] = set()
-        beginning_pos: int = 0
-        ending_pos: int = 1
-        token_size: int = len(token)
-
-        if token_size == 1:
-            trigrams.add("$" + token + "$")
-            return trigrams
-
-        while beginning_pos < token_size:
-            if ending_pos == token_size:
-                trigrams.add(token[beginning_pos : ending_pos] + "$")
-                return trigrams
-
-            trigram: str = ""
-            if ending_pos == 1:
-                trigram += "$"
-
-            trigram += token[beginning_pos : ending_pos + 1]
-            trigrams.add(trigram)
-
-            ending_pos += 1
-            if ending_pos > 2:
-                beginning_pos += 1
-
-        return trigrams
-
     def process_trigrams_in_row(
         self,
         tokens: list[str]
-    ):
+    ) -> None:
         for token in tokens:
-            trigrams = self.process_trigrams_in_token(token)
+            trigrams = get_trigrams_from_token(token)
 
             for trigram in trigrams:
-                if trigram not in self.trigram_to_token:
-                    self.trigram_to_token[trigram] = set()
+                if trigram not in self.trigram_to_tokens:
+                    self.trigram_to_tokens[trigram] = set()
 
-                self.trigram_to_token[trigram].add(token)
+                self.trigram_to_tokens[trigram].add((token, len(trigrams)))
 
     def write_trigrams(
         self,
         trigrams_path: Path,
         trigram_offsets_path: Path
-    ):
+    ) -> None:
         trigrams = open(trigrams_path, "wb")
         trigram_offsets = open(trigram_offsets_path, "wb")
 
         current_offset: int = 0
 
-        sorted_trigrams = sorted(self.trigram_to_token.keys())
+        sorted_trigrams = sorted(self.trigram_to_tokens.keys())
         for trigram in sorted_trigrams:
             encoded_trigram = trigram.encode("utf-8")
             trigram_offsets.write(struct.pack("I", len(encoded_trigram)))
             trigram_offsets.write(encoded_trigram)
-            trigrams.write(struct.pack("I", len(self.trigram_to_token[trigram])))
+            trigrams.write(struct.pack("I", len(self.trigram_to_tokens[trigram])))
             current_offset += 4
-            for token in self.trigram_to_token[trigram]:
-                encoded = token.encode("utf-8")
-                trigrams.write(struct.pack("I", len(encoded)))
-                trigrams.write(encoded)
-                current_offset += 4 + len(encoded)
-                actual_file_pos = trigrams.tell()
-                assert current_offset == actual_file_pos
+            for token, num_trigrams_in_token in self.trigram_to_tokens[trigram]:
+                encoded_token = token.encode("utf-8")
+                trigrams.write(struct.pack("I", len(encoded_token)))
+                trigrams.write(encoded_token)
+                trigrams.write(struct.pack("I", num_trigrams_in_token))
+                current_offset += 4 + len(encoded_token) + 4
 
     def merge_trigrams(
         self,
@@ -297,7 +266,7 @@ class InvertedIndexIngestion:
         src_trigrams_prefix: str,
         src_trigrams_offsets_prefix: str,
         num_blocks: int
-    ):
+    ) -> None:
         trigrams: list = []
         trigram_offsets: list = []
 
@@ -338,7 +307,7 @@ class InvertedIndexIngestion:
                     for token_id in range(num_tokens):
                         token_length_bytes = trigrams[this_block_id].read(4)
                         token_length = struct.unpack("I", token_length_bytes)[0]
-                        token_bytes: bytes = trigrams[this_block_id].read(token_length)
+                        token_bytes: bytes = trigrams[this_block_id].read(token_length + 4) # +4 for number of trigrams in token
 
                         tokens.add(token_length_bytes + token_bytes)
 
@@ -346,9 +315,9 @@ class InvertedIndexIngestion:
                 out_trigrams.write(struct.pack("I", sum_tokens))
                 current_out_offset += 4
 
-                for token_with_length_bytes in tokens:
-                    out_trigrams.write(token_with_length_bytes)
-                    current_out_offset += len(token_with_length_bytes)
+                for token_with_length_bytes_and_num_trigrams_in_token in tokens:
+                    out_trigrams.write(token_with_length_bytes_and_num_trigrams_in_token)
+                    current_out_offset += len(token_with_length_bytes_and_num_trigrams_in_token)
 
                 current_min = trigram
                 current_min_blocks.clear()

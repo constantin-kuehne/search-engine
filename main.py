@@ -47,6 +47,8 @@ if __name__ == "__main__":
         final_dir / "title_lengths",
         final_dir / "bodies",
         final_dir / "bodies_offsets",
+        final_dir / "trigrams",
+        final_dir / "trigram_offsets"
     )
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")

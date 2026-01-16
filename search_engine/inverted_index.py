@@ -10,12 +10,13 @@ from functools import partial
 from pathlib import Path
 from typing import Optional, Sequence
 
+import editdistance
 from ordered_set import OrderedSet
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
 from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode,
-                                 get_length_from_bytes)
+                                 get_length_from_bytes, get_trigrams_from_token)
 
 
 class InvertedIndex:
@@ -30,13 +31,16 @@ class InvertedIndex:
         file_path_document_lengths: str | Path,
         file_path_title_lengths: str | Path,
         file_path_bodies: str | Path,
-        file_path_bodies_offsets: str | Path
+        file_path_bodies_offsets: str | Path,
+        file_path_trigrams: str | Path,
+        file_path_trigram_offsets: str | Path
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
         term_index_file = open(file_path_term_index, "rb")
         position_list_file = open(file_path_position_list, mode="rb")
         bodies_file = open(file_path_bodies, mode="rb")
         bodies_offsets_file = open(file_path_bodies_offsets, mode="rb")
+        trigrams_file = open(file_path_trigrams, mode="rb")
 
         doc_info_file = open(file_path_doc_info, "rb")
 
@@ -71,6 +75,19 @@ class InvertedIndex:
         self.reader = lambda x: csv.DictReader(
             x, delimiter="\t", fieldnames=["docid", "url", "title"]
         )
+
+        self.trigram_to_tokens: dict[str, int] = {}
+        with open(file_path_trigram_offsets, "rb") as trigrams:
+            while True:
+                trigram_length_bytes: bytes = trigrams.read(4)
+                if len(trigram_length_bytes) != 4:
+                    break
+                trigram_length: int = struct.unpack("I", trigram_length_bytes)[0]
+                trigram: str = trigrams.read(trigram_length).decode("utf-8")
+                offset: int = struct.unpack("Q", trigrams.read(8))[0]
+                self.trigram_to_tokens[trigram] = offset
+
+        self.mm_trigrams = mmap.mmap(trigrams_file.fileno(), length=0, prot=mmap.PROT_READ)
 
         with open(file_path_metadata, "rb") as f:
             self.metadata = pickle.load(f)
@@ -601,12 +618,82 @@ class InvertedIndex:
         )
         return doc_freqs, matched_doc_ids, matched_term_freqs, matched_term_freqs_title
 
+    def get_tokens_for_trigram(
+        self,
+        trigram: str
+    ) -> set[tuple[str, int]]:
+        result: set[tuple[str, int]] = set()
+
+        byte_offset: int = self.trigram_to_tokens[trigram]
+        num_tokens: int = get_length_from_bytes(self.mm_trigrams, byte_offset)
+        byte_offset += INT_SIZE
+        for token_id in range(num_tokens):
+            token_length: int = get_length_from_bytes(self.mm_trigrams, byte_offset)
+            byte_offset += INT_SIZE
+            token: str = self.mm_trigrams[byte_offset : byte_offset + token_length].decode("utf-8")
+            byte_offset += token_length
+            num_trigrams_in_token: int = get_length_from_bytes(self.mm_trigrams, byte_offset)
+            byte_offset += INT_SIZE
+
+            result.add((token, num_trigrams_in_token))
+
+        return result
+
+    def correct_spelling(
+        self,
+        original_token: str,
+        search_space_size: int,
+        num_replacements: int
+    ) -> list[str]:
+        trigrams = get_trigrams_from_token(original_token)
+        num_trigrams: int = len(trigrams)
+        if num_trigrams == 0:
+            return original_token
+
+        possible_replacements: list[set[tuple[str, int]]] = []
+        for trigram in trigrams:
+            possible_replacements.append(self.get_tokens_for_trigram(trigram))
+
+        all_tokens = list(possible_replacements[0].union(*possible_replacements[1:]))
+        jaccard_similarities: list[tuple[float, int]] = []
+        for i, token in enumerate(all_tokens):
+            overlap_size: int = 0
+            for possible_replacement_set in possible_replacements:
+                overlap_size += token in possible_replacement_set
+
+            jaccard_similarity: float = overlap_size / (token[1] + num_trigrams - overlap_size)
+            jaccard_similarities.append((jaccard_similarity, i))
+
+        jaccard_similarities.sort(reverse=True)
+        edit_distances: list[tuple[int, int]] = []
+        for _, token_id in jaccard_similarities[:search_space_size]:
+            edit_distance = editdistance.eval(all_tokens[token_id][0], original_token)
+            edit_distances.append((edit_distance, token_id))
+
+        edit_distances.sort(reverse=False)
+
+        result: list[str] = []
+        for _, token_id in edit_distances[:num_replacements]:
+            result.append(all_tokens[token_id][0])
+
+        print("Correcting spelling of \"" + original_token + "\" with \"" + result[0] + "\"", end="")
+        for correction in result[1:]:
+            print(", \"" + correction + "\"", end="")
+        print()
+
+        return result
+
     def get_docs(
         self,
         token: str,
         idf_threshold: float = 1.0,
     ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
         res: Optional[int] = self.index.get(token, None)
+
+        if res is None:
+            token = self.correct_spelling(token, 10, 1)[0]
+            res = self.index.get(token, None)
+
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
             res += INT_SIZE + length_term  # move to the document list
@@ -710,7 +797,7 @@ class InvertedIndex:
             next_offset = self.mm_doc_info.size()
         else:
             next_offset = self.docs[doc_id + 1]
-        line = self.mm_doc_info[offset:next_offset].decode("utf-8") # TODO: THERE IS A BUG WHERE WE GET EMPTY LINES 
+        line = self.mm_doc_info[offset:next_offset].decode("utf-8") # TODO: THERE IS A BUG WHERE WE GET EMPTY LINES
 
         first_tab = line.index('\t')
         original_docid = line[:first_tab]
