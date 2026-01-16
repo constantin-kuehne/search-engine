@@ -1,4 +1,5 @@
 import csv
+import heapq
 import mmap
 import os
 import pickle
@@ -55,6 +56,8 @@ class InvertedIndexIngestion:
             if self.doc_info_offset.itemsize != 4:
                 raise RuntimeError("Machine does not have an exact 4 byte integer type")
 
+        self.trigram_to_token: dict[str, set[str]] = {}
+
     def save_to_disk(
         self,
         file_path_doc_id: str | Path,
@@ -62,6 +65,8 @@ class InvertedIndexIngestion:
         file_path_document_lengths: str | Path,
         file_path_title_lengths: str | Path,
         file_path_doc_info_offset: str | Path,
+        trigrams_path: str | Path,
+        trigrams_offset_path: str | Path
     ) -> None:
         if isinstance(file_path_doc_id, str):
             file_path_doc_id = Path(file_path_doc_id)
@@ -93,6 +98,8 @@ class InvertedIndexIngestion:
 
         doc_info_offset_file.write(self.doc_info_offset)
         doc_info_offset_file.close()
+
+        self.write_trigrams(trigrams_path, trigrams_offset_path)
 
         sorted_index_keys = sorted(self.index.keys())
         for term in sorted_index_keys:
@@ -155,6 +162,9 @@ class InvertedIndexIngestion:
         del self.index
         self.index = {}
 
+        del self.trigram_to_token
+        self.trigram_to_token = {}
+
         doc_id_file.close()
         position_list_file.close()
 
@@ -177,7 +187,7 @@ class InvertedIndexIngestion:
             "Q",
             bytes_position_list_index[0:LONG_SIZE],
         )[0]
-        
+
 
         offsets_pos_list.append(current_offset)
 
@@ -209,6 +219,148 @@ class InvertedIndexIngestion:
             ],
             offsets_pos_list,
         )
+
+    def process_trigrams_in_token(
+        self,
+        token: str
+    ):
+        trigrams: set[str] = set()
+        beginning_pos: int = 0
+        ending_pos: int = 1
+        token_size: int = len(token)
+
+        if token_size == 1:
+            trigrams.add("$" + token + "$")
+            return trigrams
+
+        while beginning_pos < token_size:
+            if ending_pos == token_size:
+                trigrams.add(token[beginning_pos : ending_pos] + "$")
+                return trigrams
+
+            trigram: str = ""
+            if ending_pos == 1:
+                trigram += "$"
+
+            trigram += token[beginning_pos : ending_pos + 1]
+            trigrams.add(trigram)
+
+            ending_pos += 1
+            if ending_pos > 2:
+                beginning_pos += 1
+
+        return trigrams
+
+    def process_trigrams_in_row(
+        self,
+        tokens: list[str]
+    ):
+        for token in tokens:
+            trigrams = self.process_trigrams_in_token(token)
+
+            for trigram in trigrams:
+                if trigram not in self.trigram_to_token:
+                    self.trigram_to_token[trigram] = set()
+
+                self.trigram_to_token[trigram].add(token)
+
+    def write_trigrams(
+        self,
+        trigrams_path: Path,
+        trigram_offsets_path: Path
+    ):
+        trigrams = open(trigrams_path, "wb")
+        trigram_offsets = open(trigram_offsets_path, "wb")
+
+        current_offset: int = 0
+
+        sorted_trigrams = sorted(self.trigram_to_token.keys())
+        for trigram in sorted_trigrams:
+            encoded_trigram = trigram.encode("utf-8")
+            trigram_offsets.write(struct.pack("I", len(encoded_trigram)))
+            trigram_offsets.write(encoded_trigram)
+            trigrams.write(struct.pack("I", len(self.trigram_to_token[trigram])))
+            current_offset += 4
+            for token in self.trigram_to_token[trigram]:
+                encoded = token.encode("utf-8")
+                trigrams.write(struct.pack("I", len(encoded)))
+                trigrams.write(encoded)
+                current_offset += 4 + len(encoded)
+                actual_file_pos = trigrams.tell()
+                assert current_offset == actual_file_pos
+
+    def merge_trigrams(
+        self,
+        trigrams_path: Path,
+        trigram_offsets_path: Path,
+        src_path_stem: Path,
+        src_trigrams_prefix: str,
+        src_trigrams_offsets_prefix: str,
+        num_blocks: int
+    ):
+        trigrams: list = []
+        trigram_offsets: list = []
+
+        out_trigrams = open(trigrams_path, "wb")
+        out_trigrams_offsets = open(trigram_offsets_path, "wb")
+
+        for block_id in range(num_blocks):
+            trigrams.append(open(src_path_stem / (src_trigrams_prefix + str(block_id)), "rb"))
+            trigram_offsets.append(open(src_path_stem / (src_trigrams_offsets_prefix + str(block_id)), "rb"))
+
+        min_heap = []
+
+        for block_id, trigram_offset in enumerate(trigram_offsets):
+            trigram_length = struct.unpack("I", trigram_offset.read(4))[0]
+            trigram: str = trigram_offset.read(trigram_length).decode("utf-8")
+            heapq.heappush(min_heap, (trigram, block_id))
+
+        current_min: str = ""
+        current_min_blocks: list[int] = []
+        tokens: set[bytes] = set()
+        current_out_offset: int = 0
+        first_element: bool = True
+        while min_heap:
+            trigram, block_id = heapq.heappop(min_heap)
+            if first_element or trigram == current_min:
+                current_min_blocks.append(block_id)
+                if first_element:
+                    first_element = False
+                    current_min = trigram
+            else:
+                encoded_trigram = current_min.encode("utf-8")
+                out_trigrams_offsets.write(struct.pack("I", len(encoded_trigram)))
+                out_trigrams_offsets.write(encoded_trigram)
+                out_trigrams_offsets.write(struct.pack("Q", current_out_offset))
+
+                for i, this_block_id in enumerate(current_min_blocks):
+                    num_tokens = struct.unpack("I", trigrams[this_block_id].read(4))[0]
+                    for token_id in range(num_tokens):
+                        token_length_bytes = trigrams[this_block_id].read(4)
+                        token_length = struct.unpack("I", token_length_bytes)[0]
+                        token_bytes: bytes = trigrams[this_block_id].read(token_length)
+
+                        tokens.add(token_length_bytes + token_bytes)
+
+                sum_tokens: int = len(tokens)
+                out_trigrams.write(struct.pack("I", sum_tokens))
+                current_out_offset += 4
+
+                for token_with_length_bytes in tokens:
+                    out_trigrams.write(token_with_length_bytes)
+                    current_out_offset += len(token_with_length_bytes)
+
+                current_min = trigram
+                current_min_blocks.clear()
+                current_min_blocks.append(block_id)
+                tokens.clear()
+
+            offset_bytes: bytes = trigram_offsets[block_id].read(4)
+            if len(offset_bytes) == 0:
+                continue
+            next_trigram_length: int = struct.unpack("I", offset_bytes)[0]
+            new_trigram: str = trigram_offsets[block_id].read(next_trigram_length).decode("utf-8")
+            heapq.heappush(min_heap, (new_trigram, block_id))
 
     def merge_blocks(
         self,
@@ -625,6 +777,8 @@ def process_chunk(
         tokens: list[str] = tokenize_text(row[3])
         tokens_title: list[str] = tokenize_text(row[2])
 
+        local_index.process_trigrams_in_row(tokens)
+
         local_index.add_document(doc.docid, tokens, tokens_title)
         local_index.doc_info_offset.append(doc_info_file.tell())
         doc_info_file.write("\t".join([row[0], row[1], row[2]]).encode("utf-8"))
@@ -645,6 +799,8 @@ def process_chunk(
         blocks_dir / f"document_lengths_{block_num}",
         blocks_dir / f"title_lengths_{block_num}",
         blocks_dir / f"doc_info_offsets_{block_num}",
+        blocks_dir / f"trigrams_{block_num}",
+        blocks_dir / f"trigram_offsets_{block_num}"
     )
     return local_index.cumulative_lengths
 
@@ -794,6 +950,9 @@ if __name__ == "__main__":
     )
     index.merge_bodies_offsets(
         final_dir / "bodies_offsets", blocks_dir, "bodies_offsets_", num_files
+    )
+    index.merge_trigrams(
+        final_dir / "trigrams", final_dir / "trigram_offsets", blocks_dir, "trigrams_", "trigram_offsets_", num_files
     )
 
     current_start = 0
