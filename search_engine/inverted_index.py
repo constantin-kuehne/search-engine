@@ -5,17 +5,17 @@ import mmap
 import os
 import pickle
 import struct
-import time
+from array import array
 from functools import partial
 from pathlib import Path
 from typing import Optional, Sequence
-from array import array
 
 from ordered_set import OrderedSet
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
-from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode, get_length_from_bytes)
+from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode,
+                                 get_length_from_bytes)
 
 
 class InvertedIndex:
@@ -58,7 +58,7 @@ class InvertedIndex:
         self.mm_bodies_offsets = mmap.mmap(bodies_offsets_file.fileno(), length=0, prot=mmap.PROT_READ)
 
         with open(file_path_doc_info_offset, "rb") as f:
-            self.docs: array = array('I')
+            self.docs: array[int] = array('I')
             if self.docs.itemsize != 4:
                 self.docs = array('L')
                 if self.docs.itemsize != 4:
@@ -85,7 +85,13 @@ class InvertedIndex:
             self.document_lengths.fromfile(f, file_bytes // 4) # uint32_t
 
         with open(file_path_title_lengths, "rb") as f:
-            self.title_lengths = pickle.load(f)
+            file_bytes: int = os.path.getsize(file_path_document_lengths)
+            self.title_lengths: array = array('I')
+            if self.title_lengths.itemsize != 4:
+                self.title_lengths = array('L')
+                if self.title_lengths.itemsize != 4:
+                    raise RuntimeError("Machine does not have an exact 4 byte integer type")
+            self.title_lengths.fromfile(f, file_bytes // 4) # uint32_t
 
     def has_phrase(self, pos_list_list: list[tuple[int]]) -> bool:
         indices = [0 for _ in range(len(pos_list_list))]
@@ -369,10 +375,10 @@ class InvertedIndex:
     ) -> tuple[list[int], list[list[int]], list[list[int]]]:
         matched: tuple[list[int], list[list[int]], list[list[int]]] = tuple([])
         if len(doc_list) == 0:
-            term_freqs = [[0 for _ in range(len(self.docs.keys()))]]
-            matched = (list(self.docs.keys()), term_freqs, term_freqs.copy())
+            term_freqs = [[0 for _ in range(len(self.docs))]]
+            matched = (list(self.docs)), term_freqs, term_freqs.copy()
         else:
-            doc_ids_matched = list(OrderedSet(self.docs.keys()).difference(*doc_list))
+            doc_ids_matched = list(OrderedSet(self.docs).difference(*doc_list))
             term_freqs = [[0 for _ in range(len(doc_ids_matched))]]
             matched = (doc_ids_matched, term_freqs, term_freqs.copy())
 
@@ -598,13 +604,13 @@ class InvertedIndex:
     def get_docs(
         self,
         token: str,
-        idf_threshold: float = 1.0,
+        idf_threshold: float = -1.0,
     ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
         res: Optional[int] = self.index.get(token, None)
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
             print(f"{token=}, {length_term=}")
-            print(f"{self.mm_doc_id_list[res:INT_SIZE:res+INT_SIZE+length_term]}")
+            print(f"{self.mm_doc_id_list[res+INT_SIZE:res+INT_SIZE+length_term]}")
             res += INT_SIZE + length_term  # move to the document list
             length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
             idf_value: float = self.calculate_idf(self.metadata["num_docs"], length_doc_list)
@@ -703,11 +709,13 @@ class InvertedIndex:
 
     def get_doc_info(self, doc_id: int, snippet_length: int) -> DocumentInfo:
         offset = self.docs[doc_id]
+        breakpoint()
         if len(self.docs) == doc_id + 1:
             next_offset = self.mm_doc_info.size()
         else:
             next_offset = self.docs[doc_id + 1]
-        line = self.mm_doc_info[offset:next_offset].decode("utf-8")
+        line = self.mm_doc_info[offset:next_offset].decode("utf-8") # TODO: THERE IS A BUG WHERE WE GET EMPTY LINES 
+        print(f"{line=}")
 
         first_tab = line.index('\t')
         original_docid = line[:first_tab]
@@ -835,8 +843,6 @@ class InvertedIndex:
             doc_freqs, matched_doc_ids, matched_term_freqs, matched_term_freqs_title = (
                 self.query_evaluator(tokens)
             )
-
-        results: list[tuple[float, SearchResult]] = []
 
         def flatten(items: Sequence[Sequence[int] | int]) -> list[int]:
             flat_list: list[int] = []

@@ -6,20 +6,18 @@ import shutil
 import struct
 import sys
 import time
+from array import array
 from io import BufferedReader
 from multiprocessing import Pool
 from multiprocessing.pool import AsyncResult
 from pathlib import Path
-from typing import Generator, NamedTuple
-from array import array
 from shutil import copyfileobj
+from typing import Generator, NamedTuple
 
 import search_engine
 from search_engine.preprocessing import tokenize_text
-from search_engine.utils import (INT_SIZE, LAST_UNICODE_CODE_POINT,
-                                 LAST_UTF8_CODE_POINT, LONG_SIZE, POSTING,
-                                 DocumentInfo, SearchMode,
-                                 get_length_from_bytes)
+from search_engine.utils import (INT_SIZE, LAST_UNICODE_CODE_POINT, LONG_SIZE,
+                                 POSTING, get_length_from_bytes)
 
 csv.field_size_limit(sys.maxsize)
 
@@ -36,16 +34,24 @@ class InvertedIndexIngestion:
 
         # simplemma + woosh
 
+        self.cumulative_lengths = [0, 0]  # cumulative length for body and title
+
         self.term_index: dict[str, int] = {}
-        self.document_lengths: array = array('I')
+        self.document_lengths: array = array("I")
         if self.document_lengths.itemsize != 4:
-            self.document_lengths = array('L')
+            self.document_lengths = array("L")
             if self.document_lengths.itemsize != 4:
                 raise RuntimeError("Machine does not have an exact 4 byte integer type")
 
-        self.doc_info_offset: array = array('I')
+        self.title_lengths: array = array("I")
+        if self.title_lengths.itemsize != 4:
+            self.title_lengths = array("L")
+            if self.title_lengths.itemsize != 4:
+                raise RuntimeError("Machine does not have an exact 4 byte integer type")
+
+        self.doc_info_offset: array = array("I")
         if self.doc_info_offset.itemsize != 4:
-            self.doc_info_offset = array('L')
+            self.doc_info_offset = array("L")
             if self.doc_info_offset.itemsize != 4:
                 raise RuntimeError("Machine does not have an exact 4 byte integer type")
 
@@ -54,7 +60,8 @@ class InvertedIndexIngestion:
         file_path_doc_id: str | Path,
         file_path_position_list: str | Path,
         file_path_document_lengths: str | Path,
-        file_path_doc_info_offset: str | Path
+        file_path_title_lengths: str | Path,
+        file_path_doc_info_offset: str | Path,
     ) -> None:
         if isinstance(file_path_doc_id, str):
             file_path_doc_id = Path(file_path_doc_id)
@@ -62,20 +69,27 @@ class InvertedIndexIngestion:
             file_path_position_list = Path(file_path_position_list)
         if isinstance(file_path_document_lengths, str):
             file_path_document_lengths = Path(file_path_document_lengths)
+        if isinstance(file_path_title_lengths, str):
+            file_path_title_lengths = Path(file_path_title_lengths)
         if isinstance(file_path_doc_info_offset, str):
             file_path_doc_info_offset = Path(file_path_doc_info_offset)
 
         file_path_doc_id.parent.mkdir(parents=True, exist_ok=True)
         file_path_position_list.parent.mkdir(parents=True, exist_ok=True)
         file_path_document_lengths.parent.mkdir(parents=True, exist_ok=True)
+        file_path_title_lengths.parent.mkdir(parents=True, exist_ok=True)
 
         doc_id_file = open(file_path_doc_id, mode="wb")
         position_list_file = open(file_path_position_list, mode="wb")
         document_length_file = open(file_path_document_lengths, mode="wb")
+        title_length_file = open(file_path_title_lengths, mode="wb")
         doc_info_offset_file = open(file_path_doc_info_offset, mode="wb")
 
         document_length_file.write(self.document_lengths)
         document_length_file.close()
+
+        title_length_file.write(self.title_lengths)
+        title_length_file.close()
 
         doc_info_offset_file.write(self.doc_info_offset)
         doc_info_offset_file.close()
@@ -93,8 +107,6 @@ class InvertedIndexIngestion:
             doc_id_file.write(term_bytes)
             # document frequency
             doc_id_file.write(struct.pack("I", len(doc_list)))
-            if term == "yet":
-                print(f"Writing term: {term} with doc freq {len(doc_list)}")
             # document list
             doc_id_file.write(struct.pack(f"{len(doc_list)}I", *doc_list))
 
@@ -118,7 +130,6 @@ class InvertedIndexIngestion:
                     )
                 )
 
-            print(f"{term}: {term_frequencies_title} | {term_frequencies} | {doc_list}")
             assert len(document_index) == len(doc_list)
 
             # term frequencies title
@@ -134,11 +145,10 @@ class InvertedIndexIngestion:
             doc_id_file.write(struct.pack(f"{len(document_index)}Q", *document_index))
 
             # doc id file: term length | term bytes | doc freq | [doc list] | [term frequencies] | [position list offsets]
+        # doc id title: term length | term bytes | doc freq | [doc list] | [term frequencies title] | [term frequencies] | [position list offsets]
 
-            # doc id title: term length | term bytes | doc freq | [doc list] | [term frequencies title] | [term frequencies] | [position list offsets]
-
-            # modify position list to include title positions = [title pos 1, title pos 2, body pos 1, body pos2]
-            # read by using the term frequencies title to separate them
+        # modify position list to include title positions = [title pos 1, title pos 2, body pos 1, body pos2]
+        # read by using the term frequencies title to separate them
 
         del self.index
         self.index = {}
@@ -272,11 +282,6 @@ class InvertedIndexIngestion:
             length_doc_list: int = get_length_from_bytes(
                 mm_files[index], offset_doc_list
             )
-
-            if current_min == "yet":
-                print(
-                    f"START: {current_min} from files {min_indices} with doc list {struct.unpack(f'{length_doc_list}I', mm_files[index][offset_doc_list + INT_SIZE : offset_doc_list + INT_SIZE + INT_SIZE * length_doc_list])}"
-                )
 
             bytes_in_file = mm_files[index][
                 pos : offset_doc_list + INT_SIZE + length_doc_list * INT_SIZE
@@ -456,11 +461,18 @@ class InvertedIndexIngestion:
     def add_document(
         self, doc_id: int, tokens: list[str], tokens_title: list[str]
     ) -> None:
-        self.document_lengths.append(len(tokens))
-        length = len(tokens) + len(tokens_title)
-        
+        doc_length = len(tokens)
+        self.document_lengths.append(doc_length)
+        self.cumulative_lengths[0] += doc_length
+
+        title_length = len(tokens_title)
+        self.title_lengths.append(title_length)
+        self.cumulative_lengths[1] += title_length
+
+        length = doc_length + title_length
+
         for position in range(length):
-            if position < len(tokens_title):
+            if position < title_length:
                 term = tokens_title[position]
                 if term not in self.index:
                     self.index[term] = ([doc_id], [[]], [[position]])
@@ -478,47 +490,57 @@ class InvertedIndexIngestion:
     def merge_contiguous_files(
         self,
         dest_path: str | Path,
-        src_path_stem: str | Path,
+        src_path_stem: Path,
         src_filename_prefix: str,
-        num_blocks: int
+        num_blocks: int,
     ) -> None:
-        with open(dest_path, mode='wb') as dest:
-            for source_path in [src_path_stem / (src_filename_prefix + str(block_id)) for block_id in range(num_blocks)]:
-                with open(source_path, mode='rb') as source:
+        with open(dest_path, mode="wb") as dest:
+            for source_path in [
+                src_path_stem / (src_filename_prefix + str(block_id))
+                for block_id in range(num_blocks)
+            ]:
+                with open(source_path, mode="rb") as source:
                     copyfileobj(source, dest)
 
     def merge_offsets(
-            self,
-            dest_path: str | Path,
-            src_path_stem: str | Path,
-            src_filename_prefix: str,
-            num_blocks: int,
-            INT_SIZE: int
+        self,
+        dest_path: str | Path,
+        src_path_stem: Path,
+        src_filename_prefix: str,
+        num_blocks: int,
+        INT_SIZE: int,
     ) -> None:
         if INT_SIZE != 4 and INT_SIZE != 8:
             raise RuntimeError("Not implemented yet!")
 
         if INT_SIZE == 4:
-            wanted_array_format_char = 'I'
-            fallback_array_format_char = 'L'
+            wanted_array_format_char = "I"
+            fallback_array_format_char = "L"
         if INT_SIZE == 8:
-            wanted_array_format_char = 'L'
-            fallback_array_format_char = 'Q'
+            wanted_array_format_char = "L"
+            fallback_array_format_char = "Q"
 
-        with open(dest_path, mode='wb') as dest:
-            with open(src_path_stem / (src_filename_prefix + '0'), mode='rb') as source:
+        with open(dest_path, mode="wb") as dest:
+            with open(src_path_stem / (src_filename_prefix + "0"), mode="rb") as source:
                 copyfileobj(source, dest)
                 source.seek(-INT_SIZE, os.SEEK_END)
-                last_chunk_highest_offset: int = int.from_bytes(source.peek(4), signed=False, byteorder='little') # this is the offset at which the next chunk starts
+                last_chunk_highest_offset: int = int.from_bytes(
+                    source.peek(4), signed=False, byteorder="little"
+                )  # this is the offset at which the next chunk starts
 
             temp_array: array = array(wanted_array_format_char)
             if temp_array.itemsize != INT_SIZE:
                 temp_array = array(fallback_array_format_char)
                 if temp_array.itemsize != INT_SIZE:
-                    raise RuntimeError(f"Machine does not have an exact {INT_SIZE} byte integer type")
+                    raise RuntimeError(
+                        f"Machine does not have an exact {INT_SIZE} byte integer type"
+                    )
 
-            for source_path in [src_path_stem / (src_filename_prefix + str(block_id)) for block_id in range(1, num_blocks)]:
-                with open(source_path, mode='rb') as source:
+            for source_path in [
+                src_path_stem / (src_filename_prefix + str(block_id))
+                for block_id in range(1, num_blocks)
+            ]:
+                with open(source_path, mode="rb") as source:
                     file_size: int = os.path.getsize(source_path)
                     num_items: int = file_size // INT_SIZE
                     temp_array.fromfile(source, num_items)
@@ -526,39 +548,29 @@ class InvertedIndexIngestion:
                         temp_array[i] = temp_array[i] + last_chunk_highest_offset
 
                     last_chunk_highest_offset = temp_array[-1]
-                    dest.seek(-INT_SIZE, os.SEEK_CUR) # overwrite the last index written in the last block (the first index of this block), as array.tofile writes the full array
+                    dest.seek(
+                        -INT_SIZE, os.SEEK_CUR
+                    )  # overwrite the last index written in the last block (the first index of this block), as array.tofile writes the full array
                     temp_array.tofile(dest)
-                    temp_array.clear()
 
     def merge_doc_info_offsets(
         self,
         dest_path: str | Path,
-        src_path_stem: str | Path,
+        src_path_stem: Path,
         src_filename_prefix: str,
-        num_blocks: int
+        num_blocks: int,
     ) -> None:
-        self.merge_offsets(
-            dest_path,
-            src_path_stem,
-            src_filename_prefix,
-            num_blocks,
-            4
-        )
+        self.merge_offsets(dest_path, src_path_stem, src_filename_prefix, num_blocks, 4)
 
     def merge_bodies_offsets(
-            self,
-            dest_path: str | Path,
-            src_path_stem: str | Path,
-            src_filename_prefix: str,
-            num_blocks: int
+        self,
+        dest_path: str | Path,
+        src_path_stem: Path,
+        src_filename_prefix: str,
+        num_blocks: int,
     ) -> None:
-        self.merge_offsets(
-            dest_path,
-            src_path_stem,
-            src_filename_prefix,
-            num_blocks,
-            8
-        )
+        self.merge_offsets(dest_path, src_path_stem, src_filename_prefix, num_blocks, 8)
+
 
 class PROCESSED_ROW(NamedTuple):
     docid: int
@@ -587,7 +599,9 @@ def process_data(
             i += 1
 
 
-def process_chunk(chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path) -> None:
+def process_chunk(
+    chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path
+) -> list[int]:
     local_index = InvertedIndexIngestion()
 
     doc_info_file = open(blocks_dir / f"doc_info_file_{block_num}", "wb")
@@ -598,12 +612,11 @@ def process_chunk(chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path) 
     for doc in chunk:
         row: list[str] = next(csv.reader([doc.line], delimiter="\t"))
         tokens: list[str] = tokenize_text(row[3])
+        tokens_title: list[str] = tokenize_text(row[2])
 
-        local_index.add_document(doc.docid, tokens)
+        local_index.add_document(doc.docid, tokens, tokens_title)
         local_index.doc_info_offset.append(doc_info_file.tell())
-        doc_info_file.write(
-            "\t".join([row[0], row[1], row[2]]).encode("utf-8")
-        )
+        doc_info_file.write("\t".join([row[0], row[1], row[2]]).encode("utf-8"))
         encoded_body = row[3].encode("utf-8")
         bodies_file.write(encoded_body)
         bodies_offsets_file.write(struct.pack("Q", bodies_file_pos))
@@ -619,9 +632,10 @@ def process_chunk(chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path) 
         blocks_dir / f"doc_id_files/doc_id_file_block_{block_num}",
         blocks_dir / f"position_list_files/position_list_file_block_{block_num}",
         blocks_dir / f"document_lengths_{block_num}",
-        blocks_dir / f"doc_info_offsets_{block_num}"
+        blocks_dir / f"title_lengths_{block_num}",
+        blocks_dir / f"doc_info_offsets_{block_num}",
     )
-    del local_index
+    return local_index.cumulative_lengths
 
 
 def merge_blocks(
@@ -654,26 +668,23 @@ if __name__ == "__main__":
     (staged_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
     (staged_dir / "position_list_files/").mkdir(parents=True, exist_ok=True)
 
+    shutil.rmtree(final_dir, ignore_errors=True)
     final_dir.mkdir(parents=True, exist_ok=True)
 
     index = InvertedIndexIngestion()
 
     print("Starting indexing...")
     start = time.time()
-
-    block_size = 5000
     block_num = 0
 
+    block_size = 40
     # max_rows = None
-    max_rows = 50000
+    max_rows = 120
 
     num_processes: int = (os.cpu_count() or 6) - 2
 
     print("Starting processing rows...")
     chunk = []
-
-    document_lengths: dict[int, int] = {}
-    title_lengths: dict[int, int] = {}
 
     num_docs = 0
     cumulative_length = 0
@@ -687,48 +698,37 @@ if __name__ == "__main__":
             "./msmarco-docs.tsv", max_rows=max_rows
         ):
             chunk.append(row)
-            document_lengths[row.docid] = len(row.tokens)
-            title_lengths[row.docid] = len(row.tokens_title)
-
-            cumulative_length += len(row.tokens)
-            cumulative_length_title += len(row.tokens_title)
 
             num_docs += 1
             if row.docid > 0 and row.docid % block_size == 0:
-                if len(threads) == num_processes:
-                    has_ready_thread: bool = False
-                    current_index: int = 0
-                    while not has_ready_thread:
-                        if threads[current_index].ready():
-                            has_ready_thread = True
-                            break
-                        current_index += 1
-                        if current_index == num_processes:
-                            current_index = 0
-                            time.sleep(1)
-
-                    threads[current_index] = pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir))
-                else:
-                    threads.append(pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir)))
-
+                threads.append(
+                    pool.apply_async(
+                        process_chunk,
+                        args=(chunk, block_num, blocks_dir),
+                    )
+                )
                 chunk = []
                 block_num += 1
 
         if chunk:
-            pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir))
+            threads.append(
+                pool.apply_async(
+                    process_chunk,
+                    args=(chunk, block_num, blocks_dir),
+                )
+            )
 
         del chunk
 
         pool.close()
         pool.join()
 
-    doc_info_file.close()
+    for thread in threads:
+        cumulative_lengths_block = thread.get()
+        cumulative_length += cumulative_lengths_block[0]
+        cumulative_length_title += cumulative_lengths_block[1]
 
-    with open(final_dir / "document_lengths", "wb") as f:
-        pickle.dump(document_lengths, f)
-
-    with open(final_dir / "title_lengths", "wb") as f:
-        pickle.dump(title_lengths, f)
+    print(f"{cumulative_length=} | {cumulative_length_title=}")
 
     average_doc_length = cumulative_length / num_docs
     average_title_length = cumulative_length_title / num_docs
@@ -749,11 +749,22 @@ if __name__ == "__main__":
     num_files = len(os.listdir(blocks_dir / "doc_id_files/"))
     length_one_stage = min(num_processes, num_files)
 
-    index.merge_contiguous_files(final_dir / "document_lengths", blocks_dir, "document_lengths_", num_files)
-    index.merge_contiguous_files(final_dir / "doc_info_file", blocks_dir, "doc_info_file_", num_files)
+    index.merge_contiguous_files(
+        final_dir / "document_lengths", blocks_dir, "document_lengths_", num_files
+    )
+    index.merge_contiguous_files(
+        final_dir / "title_lengths", blocks_dir, "title_lengths_", num_files
+    )
+    index.merge_contiguous_files(
+        final_dir / "doc_info_file", blocks_dir, "doc_info_file_", num_files
+    )
     index.merge_contiguous_files(final_dir / "bodies", blocks_dir, "bodies_", num_files)
-    index.merge_doc_info_offsets(final_dir / "doc_info_offsets", blocks_dir, "doc_info_offsets_", num_files)
-    index.merge_bodies_offsets(final_dir / "bodies_offsets", blocks_dir, "bodies_offsets_", num_files)
+    index.merge_doc_info_offsets(
+        final_dir / "doc_info_offsets", blocks_dir, "doc_info_offsets_", num_files
+    )
+    index.merge_bodies_offsets(
+        final_dir / "bodies_offsets", blocks_dir, "bodies_offsets_", num_files
+    )
 
     current_start = 0
     with Pool(processes=num_processes) as pool:
@@ -761,17 +772,18 @@ if __name__ == "__main__":
         for i, current_end in enumerate(
             range(length_one_stage, num_files + 1, length_one_stage)
         ):
-            # pool.apply_async(
-            #     merge_blocks,
-            #     args=(current_start, current_end, i, staged_dir, blocks_dir),
-            # )
-            merge_blocks(current_start, current_end, i, staged_dir, blocks_dir)
+            pool.apply_async(
+                merge_blocks,
+                args=(current_start, current_end, i, staged_dir, blocks_dir),
+            )
+            # merge_blocks(current_start, current_end, i, staged_dir, blocks_dir)
             current_start = current_end
         pool.close()
         pool.join()
 
     i = num_files // length_one_stage
     rest_files = num_files % length_one_stage
+
     if rest_files > 0 and rest_files < length_one_stage:
         index.merge_blocks(
             staged_dir / f"doc_id_files/doc_id_file_merged_{i}",
@@ -801,7 +813,6 @@ if __name__ == "__main__":
     shutil.rmtree(staged_dir)
     shutil.rmtree(blocks_dir)
 
-    index.save_doc_info_offset(final_dir / "corpus_offset_file")
     index.save_term_index(final_dir / "term_index_file")
 
     end = time.time()

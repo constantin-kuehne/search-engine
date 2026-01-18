@@ -15,7 +15,7 @@ if __name__ == "__main__":
         choices=[x for x in SearchMode],
         default=SearchMode.AND,
         required=True,
-        help=f"Search mode: {' or '.join([str(x) for x in SearchMode])}",
+        help=f"Search mode: {' or '.join([repr(x) for x in SearchMode])}",
     )
     parser.add_argument(
         "--num_return",

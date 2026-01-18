@@ -20,6 +20,9 @@ class SearchMode(Enum):
     PHRASE = "PHRASE"
     QUERY_EVALUATOR = "QUERY_EVALUATOR"
 
+    def __repr__(self) -> str:
+        return self.value
+
 
 POSTING = tuple[list[int], list[list[int]], list[list[int]]]
 
