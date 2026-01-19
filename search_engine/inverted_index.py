@@ -604,7 +604,7 @@ class InvertedIndex:
     def get_docs(
         self,
         token: str,
-        idf_threshold: float = -1.0,
+        idf_threshold: float = -10.0,
     ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
         res: Optional[int] = self.index.get(token, None)
         if res is not None:

@@ -525,16 +525,10 @@ class InvertedIndexIngestion:
                 copyfileobj(source, dest)
                 source.seek(-INT_SIZE, os.SEEK_END)
                 last_chunk_highest_offset: int = int.from_bytes(
-                    source.peek(4), signed=False, byteorder="little"
+                    source.peek(INT_SIZE), signed=False, byteorder="little"
                 )  # this is the offset at which the next chunk starts
+            print(f"Initial highest offset: {last_chunk_highest_offset}")
 
-            temp_array: array = array(wanted_array_format_char)
-            if temp_array.itemsize != INT_SIZE:
-                temp_array = array(fallback_array_format_char)
-                if temp_array.itemsize != INT_SIZE:
-                    raise RuntimeError(
-                        f"Machine does not have an exact {INT_SIZE} byte integer type"
-                    )
 
             for source_path in [
                 src_path_stem / (src_filename_prefix + str(block_id))
@@ -543,15 +537,17 @@ class InvertedIndexIngestion:
                 with open(source_path, mode="rb") as source:
                     file_size: int = os.path.getsize(source_path)
                     num_items: int = file_size // INT_SIZE
-                    temp_array.fromfile(source, num_items)
+                    block_array = array(wanted_array_format_char)
+                    block_array.fromfile(source, num_items)
                     for i in range(0, num_items):
-                        temp_array[i] = temp_array[i] + last_chunk_highest_offset
+                        block_array[i] = block_array[i] + last_chunk_highest_offset
 
-                    last_chunk_highest_offset = temp_array[-1]
+                    last_chunk_highest_offset = block_array[-1]
+                    print(f"Updated highest offset: {last_chunk_highest_offset}")
                     dest.seek(
                         -INT_SIZE, os.SEEK_CUR
                     )  # overwrite the last index written in the last block (the first index of this block), as array.tofile writes the full array
-                    temp_array.tofile(dest)
+                    block_array.tofile(dest)
 
     def merge_doc_info_offsets(
         self,
@@ -677,9 +673,9 @@ if __name__ == "__main__":
     start = time.time()
     block_num = 0
 
-    block_size = 40
+    block_size = 2
     # max_rows = None
-    max_rows = 120
+    max_rows = 25
 
     num_processes: int = (os.cpu_count() or 6) - 2
 
@@ -728,8 +724,6 @@ if __name__ == "__main__":
         cumulative_length += cumulative_lengths_block[0]
         cumulative_length_title += cumulative_lengths_block[1]
 
-    print(f"{cumulative_length=} | {cumulative_length_title=}")
-
     average_doc_length = cumulative_length / num_docs
     average_title_length = cumulative_length_title / num_docs
     meta_data = {
@@ -759,6 +753,7 @@ if __name__ == "__main__":
         final_dir / "doc_info_file", blocks_dir, "doc_info_file_", num_files
     )
     index.merge_contiguous_files(final_dir / "bodies", blocks_dir, "bodies_", num_files)
+
     index.merge_doc_info_offsets(
         final_dir / "doc_info_offsets", blocks_dir, "doc_info_offsets_", num_files
     )
@@ -810,8 +805,8 @@ if __name__ == "__main__":
 
     print(f"Finished merging blocks in {time.time() - start_merge:.4f}s")
 
-    shutil.rmtree(staged_dir)
-    shutil.rmtree(blocks_dir)
+    # shutil.rmtree(staged_dir)
+    # shutil.rmtree(blocks_dir)
 
     index.save_term_index(final_dir / "term_index_file")
 
