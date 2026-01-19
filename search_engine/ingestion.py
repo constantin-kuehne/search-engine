@@ -527,7 +527,6 @@ class InvertedIndexIngestion:
                 last_chunk_highest_offset: int = int.from_bytes(
                     source.peek(INT_SIZE), signed=False, byteorder="little"
                 )  # this is the offset at which the next chunk starts
-            print(f"Initial highest offset: {last_chunk_highest_offset}")
 
 
             for source_path in [
@@ -543,7 +542,6 @@ class InvertedIndexIngestion:
                         block_array[i] = block_array[i] + last_chunk_highest_offset
 
                     last_chunk_highest_offset = block_array[-1]
-                    print(f"Updated highest offset: {last_chunk_highest_offset}")
                     dest.seek(
                         -INT_SIZE, os.SEEK_CUR
                     )  # overwrite the last index written in the last block (the first index of this block), as array.tofile writes the full array
@@ -673,9 +671,9 @@ if __name__ == "__main__":
     start = time.time()
     block_num = 0
 
-    block_size = 2
-    # max_rows = None
-    max_rows = 25
+    block_size = 5_000
+    max_rows = None
+    # max_rows = 25
 
     num_processes: int = (os.cpu_count() or 6) - 2
 
@@ -805,8 +803,8 @@ if __name__ == "__main__":
 
     print(f"Finished merging blocks in {time.time() - start_merge:.4f}s")
 
-    # shutil.rmtree(staged_dir)
-    # shutil.rmtree(blocks_dir)
+    shutil.rmtree(staged_dir)
+    shutil.rmtree(blocks_dir)
 
     index.save_term_index(final_dir / "term_index_file")
 

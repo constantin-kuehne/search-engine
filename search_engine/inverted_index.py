@@ -609,12 +609,9 @@ class InvertedIndex:
         res: Optional[int] = self.index.get(token, None)
         if res is not None:
             length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
-            print(f"{token=}, {length_term=}")
-            print(f"{self.mm_doc_id_list[res+INT_SIZE:res+INT_SIZE+length_term]}")
             res += INT_SIZE + length_term  # move to the document list
             length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
             idf_value: float = self.calculate_idf(self.metadata["num_docs"], length_doc_list)
-            print(f"{token=}, {length_doc_list=}, {idf_value=}")
             if (
                 idf_value
                 < idf_threshold
@@ -715,7 +712,6 @@ class InvertedIndex:
         else:
             next_offset = self.docs[doc_id + 1]
         line = self.mm_doc_info[offset:next_offset].decode("utf-8") # TODO: THERE IS A BUG WHERE WE GET EMPTY LINES 
-        print(f"{line=}")
 
         first_tab = line.index('\t')
         original_docid = line[:first_tab]
@@ -735,7 +731,6 @@ class InvertedIndex:
         )
 
     def calculate_idf(self, N: int, doc_freq: int) -> float:
-        print(f"{N=}, {doc_freq=}")
         return math.log((N - doc_freq + 0.5) / (doc_freq + 0.5))
 
     def calculate_term_weight(
@@ -818,7 +813,6 @@ class InvertedIndex:
             case _:
                 raise ValueError(f"Unsupported search mode: {mode}")
 
-        print(f"{tokens=}: {term_freqs=} | {term_freqs_title=} | {doc_list=}\n")
         matched_doc_ids: Sequence[int] = []
         matched_term_freqs: Sequence[Sequence[int]] = []
         if mode == SearchMode.AND:
@@ -899,10 +893,6 @@ class InvertedIndex:
                 for tf in term_freqs_token_title
             ]
 
-            print(f"{term_weights_body=}")
-            print(f"{term_weights_title=}\n")
-
-            
             weight_title = 2.0
             term_weights = [
                 body_weight + title_weight * weight_title
