@@ -706,7 +706,6 @@ class InvertedIndex:
 
     def get_doc_info(self, doc_id: int, snippet_length: int) -> DocumentInfo:
         offset = self.docs[doc_id]
-        breakpoint()
         if len(self.docs) == doc_id + 1:
             next_offset = self.mm_doc_info.size()
         else:
