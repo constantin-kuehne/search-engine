@@ -113,6 +113,8 @@ class InvertedIndexIngestion:
             term_frequencies: list[int] = []
             term_frequencies_title: list[int] = []
 
+            assert len(position_list_list) == len(position_list_list_title)
+
             for position_list, position_list_title in zip(
                 position_list_list, position_list_list_title
             ):
@@ -175,6 +177,7 @@ class InvertedIndexIngestion:
             "Q",
             bytes_position_list_index[0:LONG_SIZE],
         )[0]
+        
 
         offsets_pos_list.append(current_offset)
 
@@ -486,6 +489,21 @@ class InvertedIndexIngestion:
                         position_list_list_title.append([position])
                     else:
                         position_list_list_title[-1].append(position)
+            else:
+                position -= len(tokens_title)
+                term = tokens[position]
+                if term not in self.index:
+                    self.index[term] = ([doc_id], [[position]], [[]])
+                else:
+                    doc_list, position_list_list, position_list_list_title = self.index[
+                        term
+                    ]
+                    if doc_list[-1] != doc_id:
+                        doc_list.append(doc_id)
+                        position_list_list.append([position])
+                        position_list_list_title.append([])
+                    else:
+                        position_list_list[-1].append(position)
 
     def merge_contiguous_files(
         self,
@@ -527,7 +545,6 @@ class InvertedIndexIngestion:
                 last_chunk_highest_offset: int = int.from_bytes(
                     source.peek(INT_SIZE), signed=False, byteorder="little"
                 )  # this is the offset at which the next chunk starts
-
 
             for source_path in [
                 src_path_stem / (src_filename_prefix + str(block_id))
@@ -662,6 +679,8 @@ if __name__ == "__main__":
     (staged_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
     (staged_dir / "position_list_files/").mkdir(parents=True, exist_ok=True)
 
+    shutil.rmtree(staged_dir, ignore_errors=True)
+    shutil.rmtree(blocks_dir, ignore_errors=True)
     shutil.rmtree(final_dir, ignore_errors=True)
     final_dir.mkdir(parents=True, exist_ok=True)
 
@@ -699,6 +718,7 @@ if __name__ == "__main__":
                     pool.apply_async(
                         process_chunk,
                         args=(chunk, block_num, blocks_dir),
+                        error_callback=lambda e: print(f"Error: {e}"),
                     )
                 )
                 chunk = []
@@ -709,6 +729,7 @@ if __name__ == "__main__":
                 pool.apply_async(
                     process_chunk,
                     args=(chunk, block_num, blocks_dir),
+                    error_callback=lambda e: print(f"Error: {e}"),
                 )
             )
 
