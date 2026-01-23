@@ -776,32 +776,30 @@ class InvertedIndex:
 
     def get_docs_phrase(
         self,
-        token: str,
+        token: str
     ) -> tuple[tuple[int], tuple[int], tuple[int], tuple[int]]:
-        res: Optional[int] = self.query_index_with_spelling_correction(token)
-        if res is not None:
-            length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
-            res += INT_SIZE + length_term  # move to the document list
-            length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
+        doc_id_file_offset = self.index.get(token)
+        if doc_id_file_offset is not None:
+            length_doc_list, index_offset = self.get_doc_frequency_for_token(token)
+            doc_id_file_offset += index_offset
+
             doc_list = struct.unpack(
                 f"{length_doc_list}I",
                 self.mm_doc_id_list[
-                    res + INT_SIZE : res + INT_SIZE + length_doc_list * INT_SIZE
+                    doc_id_file_offset : doc_id_file_offset + length_doc_list * INT_SIZE
                 ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
             )
             term_frequencies_title = struct.unpack(
                 f"{length_doc_list}I",
                 self.mm_doc_id_list[
-                    res + INT_SIZE + length_doc_list * INT_SIZE : res
-                    + INT_SIZE
+                    doc_id_file_offset + length_doc_list * INT_SIZE : doc_id_file_offset
                     + length_doc_list * INT_SIZE * 2
                 ],
             )
             term_frequencies = struct.unpack(
                 f"{length_doc_list}I",
                 self.mm_doc_id_list[
-                    res + INT_SIZE + length_doc_list * INT_SIZE * 2 : res
-                    + INT_SIZE
+                    doc_id_file_offset + length_doc_list * INT_SIZE * 2 : doc_id_file_offset
                     + length_doc_list
                     * INT_SIZE
                     * 3  # move to term frequency list: times 2 because we have to skip doc id list and title term frequency list
@@ -811,8 +809,7 @@ class InvertedIndex:
             pos_offset_list: tuple[int] = struct.unpack(
                 f"{length_doc_list}Q",
                 self.mm_doc_id_list[
-                    res + INT_SIZE + length_doc_list * INT_SIZE * 3 : res
-                    + INT_SIZE
+                    doc_id_file_offset + length_doc_list * INT_SIZE * 3 : doc_id_file_offset
                     + length_doc_list
                     * INT_SIZE
                     * 3  # move to position offset list: times 2 because we have to skip doc id list and term frequency list
