@@ -671,6 +671,9 @@ if __name__ == "__main__":
     staged_dir = Path("./staged/")
     final_dir = Path("./final/")
 
+    shutil.rmtree(staged_dir, ignore_errors=True)
+    shutil.rmtree(blocks_dir, ignore_errors=True)
+
     blocks_dir.mkdir(parents=True, exist_ok=True)
     (blocks_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
     (blocks_dir / "position_list_files/").mkdir(parents=True, exist_ok=True)
@@ -679,8 +682,6 @@ if __name__ == "__main__":
     (staged_dir / "doc_id_files/").mkdir(parents=True, exist_ok=True)
     (staged_dir / "position_list_files/").mkdir(parents=True, exist_ok=True)
 
-    shutil.rmtree(staged_dir, ignore_errors=True)
-    shutil.rmtree(blocks_dir, ignore_errors=True)
     shutil.rmtree(final_dir, ignore_errors=True)
     final_dir.mkdir(parents=True, exist_ok=True)
 
