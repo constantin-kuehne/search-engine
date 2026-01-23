@@ -604,7 +604,7 @@ class InvertedIndex:
     def get_docs(
         self,
         token: str,
-        idf_threshold: float = -10.0,
+        idf_threshold: float = 1.0,
     ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
         res: Optional[int] = self.index.get(token, None)
         if res is not None:
@@ -803,10 +803,11 @@ class InvertedIndex:
                         term_freq_per_token,
                         term_freq_title_per_token,
                     ) = self.get_docs(token)
-                    doc_list.append(doc_list_per_token)
-                    term_freqs.append(term_freq_per_token)
-                    term_freqs_title.append(term_freq_title_per_token)
-                    doc_freqs.append(len(doc_list_per_token))
+                    if len(doc_list_per_token) > 0:
+                        doc_list.append(doc_list_per_token)
+                        term_freqs.append(term_freq_per_token)
+                        term_freqs_title.append(term_freq_title_per_token)
+                        doc_freqs.append(len(doc_list_per_token))
             case SearchMode.QUERY_EVALUATOR:
                 pass
             case _:
