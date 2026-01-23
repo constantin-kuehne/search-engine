@@ -721,6 +721,44 @@ class InvertedIndex:
 
         return res, token
 
+    def get_doc_list(
+        self,
+        length_doc_list: int,
+        doc_id_file_offset: int
+    ):
+        return struct.unpack(
+            f"{length_doc_list}I",
+            self.mm_doc_id_list[
+                doc_id_file_offset : doc_id_file_offset + length_doc_list * INT_SIZE
+            ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
+        )
+
+    def get_term_frequencies(
+        self,
+        length_doc_list: int,
+        doc_id_file_offset: int
+    ):
+        return [
+            struct.unpack(
+                f"{length_doc_list}I",
+                self.mm_doc_id_list[
+                    doc_id_file_offset + length_doc_list * INT_SIZE: doc_id_file_offset
+                                                                     + length_doc_list * INT_SIZE * 2
+                ],
+            ),
+
+            struct.unpack(
+                f"{length_doc_list}I",
+                self.mm_doc_id_list[
+                    doc_id_file_offset + length_doc_list * INT_SIZE * 2: doc_id_file_offset
+                                                                         + length_doc_list
+                                                                         * INT_SIZE
+                                                                         * 3
+                    # move to term frequency list: times 2 because we have to skip doc id list and title term frequency list
+                ],
+            )
+        ]
+
     def get_docs(
         self,
         token: str,
@@ -744,28 +782,8 @@ class InvertedIndex:
                 empty_tuple: tuple[int] = tuple([])
                 return empty_tuple, empty_tuple, empty_tuple
 
-            doc_list = struct.unpack(
-                f"{length_doc_list}I",
-                self.mm_doc_id_list[
-                    doc_id_file_offset : doc_id_file_offset + length_doc_list * INT_SIZE
-                ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
-            )
-            term_frequencies_title = struct.unpack(
-                f"{length_doc_list}I",
-                self.mm_doc_id_list[
-                    doc_id_file_offset + length_doc_list * INT_SIZE : doc_id_file_offset
-                    + length_doc_list * INT_SIZE * 2
-                ],
-            )
-            term_frequencies = struct.unpack(
-                f"{length_doc_list}I",
-                self.mm_doc_id_list[
-                    doc_id_file_offset + length_doc_list * INT_SIZE * 2 : doc_id_file_offset
-                    + length_doc_list
-                    * INT_SIZE
-                    * 3  # move to term frequency list: times 2 because we have to skip doc id list and title term frequency list
-                ],
-            )
+            doc_list = self.get_doc_list(length_doc_list, doc_id_file_offset)
+            term_frequencies_title, term_frequencies = self.get_term_frequencies(length_doc_list, doc_id_file_offset)
 
             return doc_list, term_frequencies, term_frequencies_title
         else:
@@ -783,28 +801,8 @@ class InvertedIndex:
             length_doc_list, index_offset = self.get_doc_frequency_for_token(token)
             doc_id_file_offset += index_offset
 
-            doc_list = struct.unpack(
-                f"{length_doc_list}I",
-                self.mm_doc_id_list[
-                    doc_id_file_offset : doc_id_file_offset + length_doc_list * INT_SIZE
-                ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
-            )
-            term_frequencies_title = struct.unpack(
-                f"{length_doc_list}I",
-                self.mm_doc_id_list[
-                    doc_id_file_offset + length_doc_list * INT_SIZE : doc_id_file_offset
-                    + length_doc_list * INT_SIZE * 2
-                ],
-            )
-            term_frequencies = struct.unpack(
-                f"{length_doc_list}I",
-                self.mm_doc_id_list[
-                    doc_id_file_offset + length_doc_list * INT_SIZE * 2 : doc_id_file_offset
-                    + length_doc_list
-                    * INT_SIZE
-                    * 3  # move to term frequency list: times 2 because we have to skip doc id list and title term frequency list
-                ],
-            )
+            doc_list = self.get_doc_list(length_doc_list, doc_id_file_offset)
+            term_frequencies_title, term_frequencies = self.get_term_frequencies(length_doc_list, doc_id_file_offset)
 
             pos_offset_list: tuple[int] = struct.unpack(
                 f"{length_doc_list}Q",
