@@ -618,6 +618,21 @@ class InvertedIndex:
         )
         return doc_freqs, matched_doc_ids, matched_term_freqs, matched_term_freqs_title
 
+    # Returns [0] the number of documents in which this token occurs, and [1] the number of bytes needed to skip to the
+    # doc_list
+    def get_doc_frequency_for_token(
+        self,
+        token: str
+    ) -> tuple[int, int]:
+        doc_id_file_offset: Optional[int] = self.index.get(token, None)
+        if doc_id_file_offset is None:
+            return 0, 0
+
+        length_term: int = get_length_from_bytes(self.mm_doc_id_list, doc_id_file_offset)
+        doc_id_file_offset += INT_SIZE + length_term
+        length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, doc_id_file_offset)
+        return length_doc_list, INT_SIZE + length_term + INT_SIZE
+
     def get_tokens_for_trigram(
         self,
         trigram: str
@@ -642,7 +657,8 @@ class InvertedIndex:
     def correct_spelling(
         self,
         original_token: str,
-        search_space_size: int,
+        search_space_size_jaccard: int,
+        search_space_size_edit_distance: int,
         num_replacements: int
     ) -> list[str]:
         trigrams = get_trigrams_from_token(original_token)
@@ -654,7 +670,7 @@ class InvertedIndex:
         for trigram in trigrams:
             possible_replacements.append(self.get_tokens_for_trigram(trigram))
 
-        all_tokens = list(possible_replacements[0].union(*possible_replacements[1:]))
+        all_tokens: list[tuple[str, int]] = list(possible_replacements[0].union(*possible_replacements[1:]))
         jaccard_similarities: list[tuple[float, int]] = []
         for i, token in enumerate(all_tokens):
             overlap_size: int = 0
@@ -666,19 +682,29 @@ class InvertedIndex:
 
         jaccard_similarities.sort(reverse=True)
         edit_distances: list[tuple[int, int]] = []
-        for _, token_id in jaccard_similarities[:search_space_size]:
+        for _, token_id in jaccard_similarities[:search_space_size_jaccard]:
             edit_distance = editdistance.eval(all_tokens[token_id][0], original_token)
             edit_distances.append((edit_distance, token_id))
 
         edit_distances.sort(reverse=False)
+        document_frequencies: list[tuple[int, int]] = []
+        for _, token_id in edit_distances[:search_space_size_edit_distance]:
+            doc_frequency, _ = self.get_doc_frequency_for_token(all_tokens[token_id][0])
+            document_frequencies.append((doc_frequency, token_id))
 
+        document_frequencies.sort(reverse=True)
         result: list[str] = []
-        for _, token_id in edit_distances[:num_replacements]:
+        for _, token_id in document_frequencies[:num_replacements]:
             result.append(all_tokens[token_id][0])
 
-        print("Correcting spelling of \"" + original_token + "\" with \"" + result[0] + "\"", end="")
+        print("Correcting spelling of \"" + original_token + "\" with \"" + result[0] + "\". Other possibilities: ", end="")
+        first: bool = True
         for correction in result[1:]:
-            print(", \"" + correction + "\"", end="")
+            if first:
+                first = False
+            else:
+                print(", ", end="")
+            print("\"" + correction + "\"", end="")
         print()
 
         return result
@@ -686,53 +712,55 @@ class InvertedIndex:
     def query_index_with_spelling_correction(
         self,
         token: str
-    ) -> Optional[int]:
+    ) -> tuple[int, str]:
         res: Optional[int] = self.index.get(token, None)
 
         if res is None:
-            token = self.correct_spelling(token, 10, 1)[0]
+            token = self.correct_spelling(token, 75, 50, 5)[0]
             res = self.index.get(token, None)
 
-        return res
+        return res, token
 
     def get_docs(
         self,
         token: str,
-        idf_threshold: float = 1.0,
+        idf_threshold: float = 1.5,
     ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
-        res: Optional[int] = self.query_index_with_spelling_correction(token)
+        doc_id_file_offset, token = self.query_index_with_spelling_correction(token)
 
-        if res is not None:
-            length_term: int = get_length_from_bytes(self.mm_doc_id_list, res)
-            res += INT_SIZE + length_term  # move to the document list
-            length_doc_list: int = get_length_from_bytes(self.mm_doc_id_list, res)
-            idf_value: float = self.calculate_idf(self.metadata["num_docs"], length_doc_list)
-            if (
-                idf_value
-                < idf_threshold
-            ):
+        if doc_id_file_offset is not None:
+            length_doc_list, index_offset = self.get_doc_frequency_for_token(token)
+            doc_id_file_offset += index_offset
+
+            idf_score: float = self.calculate_idf(self.metadata["num_docs"], length_doc_list)
+
+            if idf_score < idf_threshold or length_doc_list == 0:
+                token = self.correct_spelling(token, 75, 50, 5)[0]
+                length_doc_list, index_offset = self.get_doc_frequency_for_token(token)
+                doc_id_file_offset += index_offset
+                idf_score = self.calculate_idf(self.metadata["num_docs"], length_doc_list)
+
+            if idf_score < idf_threshold or length_doc_list == 0:
                 empty_tuple: tuple[int] = tuple([])
                 return empty_tuple, empty_tuple, empty_tuple
 
             doc_list = struct.unpack(
                 f"{length_doc_list}I",
                 self.mm_doc_id_list[
-                    res + INT_SIZE : res + INT_SIZE + length_doc_list * INT_SIZE
+                    doc_id_file_offset : doc_id_file_offset + length_doc_list * INT_SIZE
                 ],  # + 4 and * 4 because we are on bytes level, but we use uint32 which is 4 bytes
             )
             term_frequencies_title = struct.unpack(
                 f"{length_doc_list}I",
                 self.mm_doc_id_list[
-                    res + INT_SIZE + length_doc_list * INT_SIZE : res
-                    + INT_SIZE
+                    doc_id_file_offset + length_doc_list * INT_SIZE : doc_id_file_offset
                     + length_doc_list * INT_SIZE * 2
                 ],
             )
             term_frequencies = struct.unpack(
                 f"{length_doc_list}I",
                 self.mm_doc_id_list[
-                    res + INT_SIZE + length_doc_list * INT_SIZE * 2 : res
-                    + INT_SIZE
+                    doc_id_file_offset + length_doc_list * INT_SIZE * 2 : doc_id_file_offset
                     + length_doc_list
                     * INT_SIZE
                     * 3  # move to term frequency list: times 2 because we have to skip doc id list and title term frequency list
