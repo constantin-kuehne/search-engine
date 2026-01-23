@@ -691,7 +691,7 @@ if __name__ == "__main__":
     start = time.time()
     block_num = 0
 
-    block_size = 5_000
+    block_size = 7500
     max_rows = None
     # max_rows = 25
 
@@ -715,13 +715,28 @@ if __name__ == "__main__":
 
             num_docs += 1
             if row.docid > 0 and row.docid % block_size == 0:
-                threads.append(
-                    pool.apply_async(
-                        process_chunk,
-                        args=(chunk, block_num, blocks_dir),
-                        error_callback=lambda e: print(f"Error: {e}"),
-                    )
-                )
+                if len(threads) == num_processes:
+                    has_ready_thread: bool = False
+                    current_index: int = 0
+                    while not has_ready_thread:
+                        if threads[current_index].ready():
+                            has_ready_thread = True
+                            break
+                        current_index += 1
+                        if current_index == num_processes:
+                            current_index = 0
+                            time.sleep(1)
+
+                    cumulative_lengths_block = threads[current_index].get()
+                    cumulative_length += cumulative_lengths_block[0]
+                    cumulative_length += cumulative_lengths_block[1]
+
+                    threads.pop(current_index)
+
+                    threads.append(pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir), error_callback=lambda x: print(x)))
+                else:
+                    threads.append(pool.apply_async(process_chunk, args=(chunk, block_num, blocks_dir), error_callback=lambda x: print(x)))
+
                 chunk = []
                 block_num += 1
 
