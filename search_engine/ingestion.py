@@ -534,14 +534,14 @@ class InvertedIndexIngestion:
                 ]
 
                 term_frequencies_local: bytes = mm_files[index][
-                    offset_doc_list
+                    offset_doc_list_local
                     + INT_SIZE
-                    + length_doc_list * INT_SIZE
-                    + length_doc_list * INT_SIZE : offset_doc_list
+                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list_local * INT_SIZE : offset_doc_list_local
                     + INT_SIZE
-                    + length_doc_list * INT_SIZE
-                    + length_doc_list * INT_SIZE
-                    + length_doc_list * INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list_local * INT_SIZE
                 ]
 
                 term_frequencies_title += term_frequencies_title_local
@@ -821,7 +821,7 @@ if __name__ == "__main__":
     start = time.time()
     block_num = 0
 
-    block_size = 15_000
+    block_size = 5_000
     max_rows = None
     # max_rows = 25
 
