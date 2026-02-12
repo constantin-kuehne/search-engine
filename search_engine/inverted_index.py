@@ -575,9 +575,16 @@ class InvertedIndex:
             term_freqs_title_per_doc,
             pos_tokens_per_doc_candidate,
         ):
-            if self.has_phrase(
-                pos_list_per_token,
-            ) or self.has_phrase(pos_list_title_per_token):
+            if all(pos_list for pos_list in pos_list_per_token) and self.has_phrase(
+                pos_list_per_token
+            ):
+                matched.append(doc_id)
+                pos_offsets_per_doc_matched.append(pos_offsets)
+                term_freqs_per_doc_matched.append(term_freqs_doc)
+                term_freqs_title_per_doc_matched.append(term_freqs_title_doc)
+            elif all(
+                pos_list for pos_list in pos_list_title_per_token
+            ) and self.has_phrase(pos_list_title_per_token):
                 matched.append(doc_id)
                 pos_offsets_per_doc_matched.append(pos_offsets)
                 term_freqs_per_doc_matched.append(term_freqs_doc)
@@ -879,8 +886,8 @@ class InvertedIndex:
 
         if res is None:
             token = self.correct_spelling(token, 75, 50, 5)[0]
-            result= self.index.get(token)
-            res= result[0][0] if result else None
+            result = self.index.get(token)
+            res = result[0][0] if result else None
 
         return res, token
 
