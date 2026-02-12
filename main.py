@@ -32,7 +32,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    final_dir = Path("./final/")
+    final_dir = Path("./final_test/")
 
     print("Loading inverted index from disk...")
     start = time.time()
@@ -48,7 +48,8 @@ if __name__ == "__main__":
         final_dir / "bodies",
         final_dir / "bodies_offsets",
         final_dir / "trigrams",
-        final_dir / "trigram_offsets"
+        final_dir / "trigram_offsets",
+        "./search_engine/ranking_model/checkpoints/1pdz89si/best_checkpoint.pth"
     )
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")
