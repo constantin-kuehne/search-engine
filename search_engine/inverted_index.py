@@ -865,7 +865,7 @@ class InvertedIndex:
                 first = False
             else:
                 print(", ", end="")
-            print(f'"{correction}', end="")
+            print(f'"{correction}"', end="")
         print()
 
         return result
