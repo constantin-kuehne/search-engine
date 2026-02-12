@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 import editdistance
+import marisa_trie
 import torch
 from ordered_set import OrderedSet
 
@@ -40,7 +41,7 @@ class InvertedIndex:
         file_path_ranking_model: str | Path,
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
-        term_index_file = open(file_path_term_index, "rb")
+
         position_list_file = open(file_path_position_list, mode="rb")
         bodies_file = open(file_path_bodies, mode="rb")
         bodies_offsets_file = open(file_path_bodies_offsets, mode="rb")
@@ -48,7 +49,7 @@ class InvertedIndex:
 
         doc_info_file = open(file_path_doc_info, "rb")
 
-        self.index = pickle.load(term_index_file)
+        self.index = marisa_trie.RecordTrie("<Q").mmap(str(file_path_term_index))
 
         checkpoint = torch.load(file_path_ranking_model, weights_only=False)
         self.ranking_model = RankingModel(
@@ -84,8 +85,6 @@ class InvertedIndex:
                     )
             file_bytes: int = os.path.getsize(file_path_doc_info_offset)
             self.docs.fromfile(f, file_bytes // 4)
-
-        term_index_file.close()
 
         self.reader = lambda x: csv.DictReader(
             x, delimiter="\t", fieldnames=["docid", "url", "title"]
@@ -773,7 +772,9 @@ class InvertedIndex:
     # Returns [0] the number of documents in which this token occurs, and [1] the number of bytes needed to skip to the
     # doc_list
     def get_doc_frequency_for_token(self, token: str) -> tuple[int, int]:
-        doc_id_file_offset: Optional[int] = self.index.get(token, None)
+        result: list[list[int]] = self.index.get(token)
+        doc_id_file_offset: Optional[int] = result[0][0] if result else None
+
         if doc_id_file_offset is None:
             return 0, 0
 
@@ -873,11 +874,13 @@ class InvertedIndex:
     def query_index_with_spelling_correction(
         self, token: str
     ) -> tuple[int | None, str]:
-        res: int | None = self.index.get(token, None)
+        result: list[list[int]] = self.index.get(token)
+        res: Optional[int] = result[0][0] if result else None
 
         if res is None:
             token = self.correct_spelling(token, 75, 50, 5)[0]
-            res = self.index.get(token, None)
+            result= self.index.get(token)
+            res= result[0][0] if result else None
 
         return res, token
 
@@ -965,7 +968,9 @@ class InvertedIndex:
     def get_docs_phrase(
         self, token: str
     ) -> tuple[tuple[int], tuple[int], tuple[int], tuple[int]]:
-        doc_id_file_offset = self.index.get(token)
+        result: list[list[int]] = self.index.get(token)
+        doc_id_file_offset: Optional[int] = result[0][0] if result else None
+
         if doc_id_file_offset is not None:
             length_doc_list, index_offset = self.get_doc_frequency_for_token(token)
             doc_id_file_offset += index_offset
@@ -1343,9 +1348,13 @@ class InvertedIndex:
                 )
             ]
 
-            body_score = self.fielded_bm25_score(idf_tokens=idf_per_token, tf_tokens=term_weights_body)
-            
-            title_score = self.fielded_bm25_score(idf_tokens=idf_per_token, tf_tokens=term_weights_title)
+            body_score = self.fielded_bm25_score(
+                idf_tokens=idf_per_token, tf_tokens=term_weights_body
+            )
+
+            title_score = self.fielded_bm25_score(
+                idf_tokens=idf_per_token, tf_tokens=term_weights_title
+            )
 
             score = self.fielded_bm25_score(
                 idf_tokens=idf_per_token,
@@ -1378,7 +1387,6 @@ class InvertedIndex:
                         pos_offsets,
                     ),
                 )
-        
 
         results: list[tuple[float, DocumentInfo]] = []
         bm25_candidates = sorted(bm25_candidates, key=lambda x: x[0], reverse=True)
@@ -1391,7 +1399,15 @@ class InvertedIndex:
         bm25_candidates_term_freqs_title = []
         bm25_candidates_pos_offsets = []
 
-        for score, doc_id, body_score, title_score, term_freqs_token, term_freqs_token_title, pos_offsets in bm25_candidates:
+        for (
+            score,
+            doc_id,
+            body_score,
+            title_score,
+            term_freqs_token,
+            term_freqs_token_title,
+            pos_offsets,
+        ) in bm25_candidates:
             bm25_candidates_doc_ids.append(doc_id)
             bm25_candidates_scores.append(score)
             bm25_candidates_scores_body.append(body_score)

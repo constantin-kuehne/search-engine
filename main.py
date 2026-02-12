@@ -39,7 +39,7 @@ if __name__ == "__main__":
     index = search_engine.InvertedIndex(
         final_dir / "doc_id_file_merged_final",
         final_dir / "position_list_file_merged_final",
-        final_dir / "term_index_file",
+        final_dir / "term_index.marisa",
         final_dir / "doc_info_offsets",
         final_dir / "doc_info_file",
         final_dir / "index_metadata",
