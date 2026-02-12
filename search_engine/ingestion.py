@@ -36,6 +36,7 @@ class InvertedIndexIngestion:
         # simplemma + woosh
 
         self.cumulative_lengths = [0, 0]  # cumulative length for body and title
+        self.max_lengths = [0, 0]  # max length for body and title
 
         self.term_index: dict[str, int] = {}
         self.document_lengths: array = array("I")
@@ -533,12 +534,14 @@ class InvertedIndexIngestion:
                 ]
 
                 term_frequencies_local: bytes = mm_files[index][
-                    offset_doc_list_local
+                    offset_doc_list
                     + INT_SIZE
-                    + length_doc_list_local * INT_SIZE : offset_doc_list_local
+                    + length_doc_list * INT_SIZE
+                    + length_doc_list * INT_SIZE : offset_doc_list
                     + INT_SIZE
-                    + length_doc_list_local * INT_SIZE
-                    + length_doc_list_local * INT_SIZE
+                    + length_doc_list * INT_SIZE
+                    + length_doc_list * INT_SIZE
+                    + length_doc_list * INT_SIZE
                 ]
 
                 term_frequencies_title += term_frequencies_title_local
@@ -588,10 +591,12 @@ class InvertedIndexIngestion:
         doc_length = len(tokens)
         self.document_lengths.append(doc_length)
         self.cumulative_lengths[0] += doc_length
+        self.max_lengths[0] = max(self.max_lengths[0], doc_length)
 
         title_length = len(tokens_title)
         self.title_lengths.append(title_length)
         self.cumulative_lengths[1] += title_length
+        self.max_lengths[1] = max(self.max_lengths[1], title_length)
 
         length = doc_length + title_length
 
@@ -733,7 +738,7 @@ def process_data(
 
 def process_chunk(
     chunk: list[PROCESSED_ROW], block_num: int, blocks_dir: Path
-) -> list[int]:
+) -> tuple[list[int], list[int]]:
     local_index = InvertedIndexIngestion()
 
     doc_info_file = open(blocks_dir / f"doc_info_file_{block_num}", "wb")
@@ -771,7 +776,7 @@ def process_chunk(
         blocks_dir / f"trigrams_{block_num}",
         blocks_dir / f"trigram_offsets_{block_num}"
     )
-    return local_index.cumulative_lengths
+    return local_index.cumulative_lengths, local_index.max_lengths
 
 
 def merge_blocks(
@@ -794,7 +799,7 @@ def merge_blocks(
 if __name__ == "__main__":
     blocks_dir = Path("./blocks/")
     staged_dir = Path("./staged/")
-    final_dir = Path("./final/")
+    final_dir = Path("./final_test/")
 
     shutil.rmtree(staged_dir, ignore_errors=True)
     shutil.rmtree(blocks_dir, ignore_errors=True)
@@ -816,7 +821,7 @@ if __name__ == "__main__":
     start = time.time()
     block_num = 0
 
-    block_size = 7500
+    block_size = 15_000
     max_rows = None
     # max_rows = 25
 
@@ -828,6 +833,8 @@ if __name__ == "__main__":
     num_docs = 0
     cumulative_length = 0
     cumulative_length_title = 0
+    max_doc_length = 0
+    max_title_length = 0
 
     threads: list[AsyncResult] = []
 
@@ -852,9 +859,12 @@ if __name__ == "__main__":
                             current_index = 0
                             time.sleep(1)
 
-                    cumulative_lengths_block = threads[current_index].get()
+                    cumulative_lengths_block, max_lengths  = threads[current_index].get()
                     cumulative_length += cumulative_lengths_block[0]
                     cumulative_length += cumulative_lengths_block[1]
+                    max_doc_length = max(max_doc_length, max_lengths[0])
+                    max_title_length = max(max_title_length, max_lengths[1])
+
 
                     threads.pop(current_index)
 
@@ -880,13 +890,17 @@ if __name__ == "__main__":
         pool.join()
 
     for thread in threads:
-        cumulative_lengths_block = thread.get()
+        cumulative_lengths_block, max_lengths = thread.get()
         cumulative_length += cumulative_lengths_block[0]
         cumulative_length_title += cumulative_lengths_block[1]
+        max_doc_length = max(max_doc_length, max_lengths[0])
+        max_title_length = max(max_title_length, max_lengths[1])
 
     average_doc_length = cumulative_length / num_docs
     average_title_length = cumulative_length_title / num_docs
     meta_data = {
+        "max_doc_length": max_doc_length,
+        "max_title_length": max_title_length,
         "average_doc_length": average_doc_length,
         "average_title_length": average_title_length,
         "num_docs": num_docs,
