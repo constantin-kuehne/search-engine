@@ -487,29 +487,44 @@ class InvertedIndex:
             pos_list_token: list[tuple[int]] = []
             pos_list_title_token: list[tuple[int]] = []
             for token_idx, pos_offset in enumerate(pos_offset_tuple):
-                length_pos_list = struct.unpack(
-                    "I", self.mm_position_list[pos_offset : pos_offset + INT_SIZE]
-                )[0]
-                pos_list_title: tuple[int] = struct.unpack(
-                    f"{term_freqs_title_per_doc[doc_idx][token_idx]}I",
-                    self.mm_position_list[
-                        pos_offset + INT_SIZE : pos_offset
-                        + INT_SIZE
-                        + term_freqs_title_per_doc[doc_idx][token_idx] * INT_SIZE
-                    ],
-                )
+                if (
+                    term_freqs_per_doc[doc_idx][token_idx] == 0
+                    and term_freqs_title_per_doc[doc_idx][token_idx] == 0
+                ):
+                    continue
+                else:
+                    length_pos_list = struct.unpack(
+                        "I", self.mm_position_list[pos_offset : pos_offset + INT_SIZE]
+                    )[0]
 
-                pos_list: tuple[int] = struct.unpack(
-                    f"{term_freqs_per_doc[doc_idx][token_idx]}I",
-                    self.mm_position_list[
-                        pos_offset
-                        + INT_SIZE
-                        + term_freqs_title_per_doc[doc_idx][token_idx]
-                        * INT_SIZE : pos_offset + INT_SIZE + length_pos_list * INT_SIZE
-                    ],
-                )
-                pos_list_title_token.append(pos_list_title)
-                pos_list_token.append(pos_list)
+                if term_freqs_per_doc[doc_idx][token_idx] == 0:
+                    pos_list_token.append(tuple())
+                else:
+                    pos_list: tuple[int] = struct.unpack(
+                        f"{term_freqs_per_doc[doc_idx][token_idx]}I",
+                        self.mm_position_list[
+                            pos_offset
+                            + INT_SIZE
+                            + term_freqs_title_per_doc[doc_idx][token_idx]
+                            * INT_SIZE : pos_offset
+                            + INT_SIZE
+                            + length_pos_list * INT_SIZE
+                        ],
+                    )
+                    pos_list_token.append(pos_list)
+
+                if term_freqs_title_per_doc[doc_idx][token_idx] == 0:
+                    pos_list_title_token.append(tuple())
+                else:
+                    pos_list_title: tuple[int] = struct.unpack(
+                        f"{term_freqs_title_per_doc[doc_idx][token_idx]}I",
+                        self.mm_position_list[
+                            pos_offset + INT_SIZE : pos_offset
+                            + INT_SIZE
+                            + term_freqs_title_per_doc[doc_idx][token_idx] * INT_SIZE
+                        ],
+                    )
+                    pos_list_title_token.append(pos_list_title)
 
             pos_list_title_tokens_per_doc.append(pos_list_title_token)
             pos_list_tokens_per_doc.append(pos_list_token)
@@ -636,7 +651,7 @@ class InvertedIndex:
                     not isinstance(node.right.value, str)
                     and not node.right.value == SearchMode.NOT
                 ):
-                    rult_pos_offsets = [result_pos_offsets]
+                    right_result_pos_offset = [right_result_pos_offset]
                     right_result_term_freq = [right_result_term_freq]
                     right_result_term_freq_title = [right_result_term_freq_title]
 
@@ -1094,7 +1109,6 @@ class InvertedIndex:
         matched_term_freqs_title: Sequence[Sequence[int]],
         matched_pos_offsets: Sequence[Sequence[int]],
     ):
-        features = []
         # ["bm25_score","bm25_score_body","bm25_score_title","body_first_occurrence_mean","title_first_occurrence_mean",
         # "body_first_occurrence_min","title_first_occurrence_min","body_length_norm","title_length_norm","in_title"]
 
@@ -1112,6 +1126,16 @@ class InvertedIndex:
         title_length_norm = []
         in_title = []
 
+        matched_pos_offsets = [
+            self.flatten(pos_offset_tuple) for pos_offset_tuple in matched_pos_offsets
+        ]
+        matched_term_freqs = [
+            self.flatten(term_freq_tuple) for term_freq_tuple in matched_term_freqs
+        ]
+        matched_term_freqs_title = [
+            self.flatten(term_freq_title_tuple)
+            for term_freq_title_tuple in matched_term_freqs_title
+        ]
         pos_list_tokens_per_doc, pos_list_title_tokens_per_doc = self.get_pos_offsets(
             matched_pos_offsets, matched_term_freqs, matched_term_freqs_title
         )
@@ -1434,7 +1458,7 @@ class InvertedIndex:
             matched_pos_offsets=bm25_candidates_pos_offsets,
         ).unsqueeze(0)
 
-        predicted_scores = self.ranking_model(features).squeeze().tolist()
+        predicted_scores = self.ranking_model(features).squeeze(0).tolist()
 
         for doc_id, predicted_score in zip(bm25_candidates_doc_ids, predicted_scores):
             if len(result_candidates) < num_return:
