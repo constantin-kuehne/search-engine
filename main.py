@@ -29,27 +29,42 @@ if __name__ == "__main__":
         default=100,
         help="Number of characters to show in the body snippet of each search result",
     )
+    parser.add_argument(
+        "--disable_spelling_correction",
+        action="store_false",
+        help="Whether disable enable spelling correction",
+        dest="enable_spelling_correction",
+        default=True,
+    )
 
     args = parser.parse_args()
+
+    enable_semantic_search = args.mode == SearchMode.SEMANTIC
+    print(f"Semantic search enabled: {enable_semantic_search}")
 
     final_dir = Path("./final_test/")
 
     print("Loading inverted index from disk...")
     start = time.time()
     index = search_engine.InvertedIndex(
-        final_dir / "doc_id_file_merged_final",
-        final_dir / "position_list_file_merged_final",
-        final_dir / "term_index.marisa",
-        final_dir / "doc_info_offsets",
-        final_dir / "doc_info_file",
-        final_dir / "index_metadata",
-        final_dir / "document_lengths",
-        final_dir / "title_lengths",
-        final_dir / "bodies",
-        final_dir / "bodies_offsets",
-        final_dir / "trigrams",
-        final_dir / "trigram_offsets",
-        "./search_engine/ranking_model/checkpoints/1pdz89si/best_checkpoint.pth"
+        file_path_doc_id=final_dir / "doc_id_file_merged_final",
+        file_path_position_list=final_dir / "position_list_file_merged_final",
+        file_path_term_index=final_dir / "term_index.marisa",
+        file_path_doc_info_offset=final_dir / "doc_info_offsets",
+        file_path_doc_info=final_dir / "doc_info_file",
+        file_path_metadata=final_dir / "index_metadata",
+        file_path_document_lengths=final_dir / "document_lengths",
+        file_path_title_lengths=final_dir / "title_lengths",
+        file_path_bodies=final_dir / "bodies",
+        file_path_bodies_offsets=final_dir / "bodies_offsets",
+        file_path_trigrams=final_dir / "trigrams",
+        file_path_trigram_offsets=final_dir / "trigram_offsets",
+        file_path_ranking_model="./search_engine/ranking_model/checkpoints/1pdz89si/best_checkpoint.pth",
+        file_path_embeddings="./final_embed/embeddings.npy",
+        file_path_embedding_metadata="./final_embed/embedding_metadata",
+        enable_semantic_search=enable_semantic_search,
+        enable_spelling_correction=args.enable_spelling_correction,
+
     )
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")
@@ -64,7 +79,7 @@ if __name__ == "__main__":
                 query,
                 mode=args.mode,
                 num_return=args.num_return,
-                snippet_length=args.length_body
+                snippet_length=args.length_body,
             )
             print(f"We found {num_results} results matching your query.")
             print(f"{min(args.num_return, num_results)} of them are:")

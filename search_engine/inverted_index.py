@@ -12,8 +12,10 @@ from typing import Optional, Sequence
 
 import editdistance
 import marisa_trie
+import numpy as np
 import torch
 from ordered_set import OrderedSet
+from sentence_transformers import SentenceTransformer, util
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
@@ -39,6 +41,10 @@ class InvertedIndex:
         file_path_trigrams: str | Path,
         file_path_trigram_offsets: str | Path,
         file_path_ranking_model: str | Path,
+        file_path_embeddings: str | Path,
+        file_path_embedding_metadata: str | Path,
+        enable_semantic_search: bool = True,
+        enable_spelling_correction: bool = True,
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
 
@@ -50,6 +56,8 @@ class InvertedIndex:
         doc_info_file = open(file_path_doc_info, "rb")
 
         self.index = marisa_trie.RecordTrie("<Q").mmap(str(file_path_term_index))
+        self.enable_spelling_correction = enable_spelling_correction
+        self.enable_semantic_search = enable_semantic_search
 
         checkpoint = torch.load(file_path_ranking_model, weights_only=False)
         self.ranking_model = RankingModel(
@@ -129,6 +137,25 @@ class InvertedIndex:
                         "Machine does not have an exact 4 byte integer type"
                     )
             self.title_lengths.fromfile(f, file_bytes // 4)  # uint32_t
+
+        if enable_semantic_search:
+            with open(file_path_embedding_metadata, "rb") as f:
+                self.embedding_metadata = pickle.load(f)
+
+            with open(file_path_embeddings, "rb") as f:
+                self.doc_embeddings = np.reshape(
+                    np.fromfile(f, dtype=np.float32),
+                    shape=(
+                        self.embedding_metadata["num_docs"],
+                        self.embedding_metadata["truncate_dim"],
+                    ),
+                )
+
+            self.sentence_transformer = SentenceTransformer(
+                "all-MiniLM-L6-v2",
+                device="mps" if torch.backends.mps.is_available() else "cpu",
+            )
+            self.sentence_transformer.max_seq_length = 256
 
     def has_phrase(self, pos_list_list: list[tuple[int]]) -> bool:
         indices = [0 for _ in range(len(pos_list_list))]
@@ -899,7 +926,7 @@ class InvertedIndex:
         result: list[list[int]] = self.index.get(token)
         res: Optional[int] = result[0][0] if result else None
 
-        if res is None:
+        if (res is None) and self.enable_spelling_correction:
             token = self.correct_spelling(token, 75, 50, 5)[0]
             result = self.index.get(token)
             res = result[0][0] if result else None
@@ -951,7 +978,9 @@ class InvertedIndex:
                 self.metadata["num_docs"], length_doc_list
             )
 
-            if idf_score < idf_threshold or length_doc_list == 0:
+            if (
+                idf_score < idf_threshold or length_doc_list == 0
+            ) and self.enable_spelling_correction:
                 token = self.correct_spelling(token, 75, 50, 5)[0]
                 length_doc_list, index_offset = self.get_doc_frequency_for_token(token)
                 doc_id_file_offset += index_offset
@@ -1218,14 +1247,35 @@ class InvertedIndex:
                 flat_list.extend(flattened_sublist)
         return flat_list
 
-    def search(
+    def semantic_search(
+        self, query: str, num_return: int, snippet_length: int
+    ) -> tuple[int, list[tuple[float, DocumentInfo]]]:
+        query_embedding = self.sentence_transformer.encode(
+            [query],
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )
+
+        cosine_similarities = util.semantic_search(
+            query_embedding,  # pyright: ignore
+            self.doc_embeddings,  # pyright: ignore
+            top_k=num_return,
+        )
+
+        doc_ids = [int(match["corpus_id"]) for match in cosine_similarities[0]]
+        scores = [float(match["score"]) for match in cosine_similarities[0]]
+        doc_infos = [self.get_doc_info(doc_id, snippet_length) for doc_id in doc_ids]
+
+        return len(doc_ids), list(zip(scores, doc_infos))
+
+    def traditional_search(
         self,
         query: str,
         mode: SearchMode,
-        num_bm25_candidates: int = 100,
-        num_return: int = 10,
-        snippet_length: int = 100,
-    ) -> tuple[int, list[tuple[float, DocumentInfo]]]:
+        num_bm25_candidates: int,
+        num_return: int,
+        snippet_length: int,
+    ):
         tokens = tokenize_text(query)
 
         doc_list: list[tuple[int, ...]] = []
@@ -1477,3 +1527,22 @@ class InvertedIndex:
             results.append((score, self.get_doc_info(doc_id, snippet_length)))
 
         return len(matched_doc_ids), results
+
+    def search(
+        self,
+        query: str,
+        mode: SearchMode,
+        num_bm25_candidates: int = 100,
+        num_return: int = 10,
+        snippet_length: int = 100,
+    ) -> tuple[int, list[tuple[float, DocumentInfo]]]:
+        if self.enable_semantic_search:
+            return self.semantic_search(query, num_return, snippet_length)
+        else:
+            return self.traditional_search(
+                query=query,
+                mode=mode,
+                num_bm25_candidates=num_bm25_candidates,
+                num_return=num_return,
+                snippet_length=snippet_length,
+            )

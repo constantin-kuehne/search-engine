@@ -48,6 +48,7 @@ class SearchMode(Enum):
     NOT = "NOT"
     PHRASE = "PHRASE"
     QUERY_EVALUATOR = "QUERY_EVALUATOR"
+    SEMANTIC = "SEMANTIC"
 
     def __repr__(self) -> str:
         return self.value
