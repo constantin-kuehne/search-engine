@@ -8,7 +8,7 @@ import struct
 from array import array
 from functools import partial
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import NamedTuple, Optional, Sequence
 
 import editdistance
 import marisa_trie
@@ -23,6 +23,12 @@ from search_engine.ranking_model.model import RankingModel
 from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode,
                                  get_length_from_bytes,
                                  get_trigrams_from_token)
+
+
+class SemTradContainResult(NamedTuple):
+    org_sem_idx: int
+    doc_id: int
+    trad_idx: Optional[int]
 
 
 class InvertedIndex:
@@ -138,6 +144,17 @@ class InvertedIndex:
                     )
             self.title_lengths.fromfile(f, file_bytes // 4)  # uint32_t
 
+        avg_doc_length = self.metadata["average_doc_length"]
+
+        self.calculate_term_weight_body = partial(
+            self.calculate_term_weight, avg_length=avg_doc_length
+        )
+        avg_title_length = self.metadata["average_title_length"]
+
+        self.calculate_term_weight_title = partial(
+            self.calculate_term_weight, avg_length=avg_title_length
+        )
+
         if enable_semantic_search:
             with open(file_path_embedding_metadata, "rb") as f:
                 self.embedding_metadata = pickle.load(f)
@@ -156,6 +173,9 @@ class InvertedIndex:
                 device="mps" if torch.backends.mps.is_available() else "cpu",
             )
             self.sentence_transformer.max_seq_length = 256
+
+            
+
 
     def has_phrase(self, pos_list_list: list[tuple[int]]) -> bool:
         indices = [0 for _ in range(len(pos_list_list))]
@@ -967,6 +987,7 @@ class InvertedIndex:
         self,
         token: str,
         idf_threshold: float = 1.5,
+        enable_threshold: bool = True,
     ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
         doc_id_file_offset, token = self.query_index_with_spelling_correction(token)
 
@@ -988,7 +1009,9 @@ class InvertedIndex:
                     self.metadata["num_docs"], length_doc_list
                 )
 
-            if idf_score < idf_threshold or length_doc_list == 0:
+            if (enable_threshold) and (
+                idf_score < idf_threshold or length_doc_list == 0
+            ):
                 empty_tuple: tuple[int] = tuple([])
                 return empty_tuple, empty_tuple, empty_tuple, empty_tuple
 
@@ -1131,12 +1154,12 @@ class InvertedIndex:
     def extract_features(
         self,
         matched_doc_ids: Sequence[int],
-        matched_bm25_scores: Sequence[int],
-        matched_bm25_scores_body: Sequence[int],
-        matched_bm25_scores_title: Sequence[int],
+        matched_bm25_scores: Sequence[float],
+        matched_bm25_scores_body: Sequence[float],
+        matched_bm25_scores_title: Sequence[float],
         matched_term_freqs: Sequence[Sequence[int]],
         matched_term_freqs_title: Sequence[Sequence[int]],
-        matched_pos_offsets: Sequence[Sequence[int]],
+        matched_pos_offsets: Sequence[Sequence[int | None]],
     ):
         # ["bm25_score","bm25_score_body","bm25_score_title","body_first_occurrence_mean","title_first_occurrence_mean",
         # "body_first_occurrence_min","title_first_occurrence_min","body_length_norm","title_length_norm","in_title"]
@@ -1158,15 +1181,17 @@ class InvertedIndex:
         matched_pos_offsets = [
             self.flatten(pos_offset_tuple) for pos_offset_tuple in matched_pos_offsets
         ]
-        matched_term_freqs = [
+        matched_term_freqs_flattened = [
             self.flatten(term_freq_tuple) for term_freq_tuple in matched_term_freqs
         ]
-        matched_term_freqs_title = [
+        matched_term_freqs_title_flattend = [
             self.flatten(term_freq_title_tuple)
             for term_freq_title_tuple in matched_term_freqs_title
         ]
         pos_list_tokens_per_doc, pos_list_title_tokens_per_doc = self.get_pos_offsets(
-            matched_pos_offsets, matched_term_freqs, matched_term_freqs_title
+            matched_pos_offsets,
+            matched_term_freqs_flattened,
+            matched_term_freqs_title_flattend,
         )
 
         for (
@@ -1180,8 +1205,8 @@ class InvertedIndex:
             pos_list_tokens_title,
         ) in zip(
             matched_doc_ids,
-            matched_term_freqs,
-            matched_term_freqs_title,
+            matched_term_freqs_flattened,
+            matched_term_freqs_title_flattend,
             matched_bm25_scores,
             matched_bm25_scores_body,
             matched_bm25_scores_title,
@@ -1198,6 +1223,7 @@ class InvertedIndex:
             bm25_scores_body.append(bm25_score_body)
             bm25_scores_title.append(bm25_score_title)
 
+            breakpoint()
             body_first_occurrence = [
                 pos_list[0] / doc_length if len(pos_list) > 0 else 1.0
                 for pos_list in pos_list_tokens
@@ -1237,15 +1263,107 @@ class InvertedIndex:
             ]
         ).T
 
-    def flatten(self, items: Sequence[Sequence[int] | int]) -> list[int]:
-        flat_list: list[int] = []
+    def flatten(
+        self, items: Sequence[Sequence[Optional[int]] | Optional[int]]
+    ) -> list[int | None]:
+        flat_list: list[int | None] = []
         for item in items:
-            if isinstance(item, int):
+            if isinstance(item, int) or item is None:
                 flat_list.append(item)
             else:
                 flattened_sublist = self.flatten(item)
                 flat_list.extend(flattened_sublist)
         return flat_list
+
+    def calculate_bm25_scores(
+        self, doc_id, term_freqs_token, term_freqs_token_title, idf_per_token
+    ):
+        doc_length = self.document_lengths[doc_id]
+        title_length = self.title_lengths[doc_id]
+
+        term_weights_body = [
+            self.calculate_term_weight_body(
+                tf=tf,
+                doc_length=doc_length,
+            )
+            for tf in term_freqs_token
+        ]
+
+        term_weights_title = [
+            self.calculate_term_weight_title(
+                tf=tf,
+                doc_length=title_length,
+            )
+            for tf in term_freqs_token_title
+        ]
+
+        weight_title = 2.0
+        term_weights = [
+            body_weight + title_weight * weight_title
+            for body_weight, title_weight in zip(term_weights_body, term_weights_title)
+        ]
+
+        body_score = self.fielded_bm25_score(
+            idf_tokens=idf_per_token, tf_tokens=term_weights_body
+        )
+
+        title_score = self.fielded_bm25_score(
+            idf_tokens=idf_per_token, tf_tokens=term_weights_title
+        )
+
+        score = self.fielded_bm25_score(
+            idf_tokens=idf_per_token,
+            tf_tokens=term_weights,
+        )
+
+        return score, body_score, title_score
+
+    def traditional_doc_ids_contain_semantic_doc_ids(
+        self, traditional_doc_ids: list[int], semantic_doc_ids: list[int]
+    ) -> list[SemTradContainResult]:
+        semantic_doc_ids_sort = sorted(
+            [
+                (semantic_doc_id, idx)
+                for idx, semantic_doc_id in enumerate(semantic_doc_ids)
+            ],
+            key=lambda x: x[0],
+        )
+        traditional_index = 0
+        semantic_index = 0
+        result: list[SemTradContainResult] = []
+
+        while traditional_index < len(traditional_doc_ids) and semantic_index < len(
+            semantic_doc_ids_sort
+        ):
+            if (
+                traditional_doc_ids[traditional_index]
+                == semantic_doc_ids_sort[semantic_index]
+            ):
+                result.append(
+                    SemTradContainResult(
+                        org_sem_idx=semantic_doc_ids_sort[semantic_index][1],
+                        doc_id=traditional_doc_ids[traditional_index],
+                        trad_idx=traditional_index,
+                    )
+                )
+                traditional_index += 1
+                semantic_index += 1
+            elif (
+                traditional_doc_ids[traditional_index]
+                < semantic_doc_ids_sort[semantic_index][0]
+            ):
+                traditional_index += 1
+            else:
+                result.append(
+                    SemTradContainResult(
+                        org_sem_idx=semantic_doc_ids_sort[semantic_index][1],
+                        doc_id=semantic_doc_ids_sort[semantic_index][0],
+                        trad_idx=None,
+                    )
+                )
+                semantic_index += 1
+
+        return result
 
     def semantic_search(
         self, query: str, num_return: int, snippet_length: int
@@ -1256,6 +1374,31 @@ class InvertedIndex:
             normalize_embeddings=True,
         )
 
+        # tokenize query
+        # for each token get the doc list and term frequencies and postion offsets
+        # intersection between doc_ids of semantic search and each token if semantic search doc id not in tradtional then 0 (save indices for term frequencies and position offsets)
+        # score = some linear combination of rank and semantic score
+
+        tokenized_query = tokenize_text(query)
+
+        doc_ids_per_token: list[tuple[int, ...]] = []
+        pos_offset_list_per_token: list[tuple[int, ...]] = []
+        term_frequencies_per_token: list[tuple[int, ...]] = []
+        term_frequencies_title_per_token: list[tuple[int, ...]] = []
+
+        doc_freqs: list[int] = []
+
+        for token in tokenized_query:
+            doc_list, pos_offset_list, term_frequencies, term_frequencies_title = (
+                self.get_docs(token, enable_threshold=False)
+            )
+            doc_ids_per_token.append(doc_list)
+            pos_offset_list_per_token.append(pos_offset_list)
+            term_frequencies_per_token.append(term_frequencies)
+            term_frequencies_title_per_token.append(term_frequencies_title)
+
+            doc_freqs.append(len(doc_list))
+
         cosine_similarities = util.semantic_search(
             query_embedding,  # pyright: ignore
             self.doc_embeddings,  # pyright: ignore
@@ -1263,10 +1406,82 @@ class InvertedIndex:
         )
 
         doc_ids = [int(match["corpus_id"]) for match in cosine_similarities[0]]
-        scores = [float(match["score"]) for match in cosine_similarities[0]]
-        doc_infos = [self.get_doc_info(doc_id, snippet_length) for doc_id in doc_ids]
 
-        return len(doc_ids), list(zip(scores, doc_infos))
+        matched_doc_ids: list[int] = doc_ids
+        matched_term_freqs: list[list[int]] = [[]] * len(doc_ids)
+        matched_term_freqs_title: list[list[int]] = [[]] * len(doc_ids)
+        matched_pos_offsets: list[list[int | None]] = [[]] * len(doc_ids)
+
+        matched_bm25_scores: list[float] = []
+        matched_bm25_scores_body: list[float] = []
+        matched_bm25_scores_title: list[float] = []
+
+        idf_per_token = [
+            self.calculate_idf(self.metadata["num_docs"], df) for df in doc_freqs
+        ]
+
+        # matched_term_freqs = [doc1: [tf_token1, tf_token2]. doc2: [tf_token1, tf_token2]]]
+        # matched_term_freq = [[], [],] if we have 2 doc ids
+        for token_idx, token_doc_ids in enumerate(doc_ids_per_token):
+            doc_ids_filtered = self.traditional_doc_ids_contain_semantic_doc_ids(
+                list(token_doc_ids), doc_ids
+            )
+
+            for org_sem_idx, doc_id, traditional_index in doc_ids_filtered:
+                if traditional_index is not None:
+                    pos_offset = pos_offset_list_per_token[token_idx][traditional_index]
+                    term_freq = term_frequencies_per_token[token_idx][traditional_index]
+                    term_freq_title = term_frequencies_title_per_token[token_idx][
+                        traditional_index
+                    ]
+                else:
+                    pos_offset = None
+                    term_freq = 0
+                    term_freq_title = 0
+
+                matched_term_freqs[org_sem_idx].append(term_freq)
+                matched_term_freqs_title[org_sem_idx].append(term_freq_title)
+                matched_pos_offsets[org_sem_idx].append(pos_offset)
+
+        for i in range(len(matched_doc_ids)):
+            score, body_score, title_score = self.calculate_bm25_scores(
+                doc_id=matched_doc_ids[i],
+                term_freqs_token=matched_term_freqs[i],
+                term_freqs_token_title=matched_term_freqs_title[i],
+                idf_per_token=idf_per_token,
+            )
+            matched_bm25_scores.append(score)
+            matched_bm25_scores_body.append(body_score)
+            matched_bm25_scores_title.append(title_score)
+
+        scores = np.array([float(match["score"]) for match in cosine_similarities[0]])
+        scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-8)
+
+        features = self.extract_features(
+            matched_doc_ids=matched_doc_ids,
+            matched_bm25_scores=matched_bm25_scores,
+            matched_bm25_scores_body=matched_bm25_scores_body,
+            matched_bm25_scores_title=matched_bm25_scores_title,
+            matched_term_freqs=matched_term_freqs,
+            matched_term_freqs_title=matched_term_freqs_title,
+            matched_pos_offsets=matched_pos_offsets,
+        ).unsqueeze(0)
+
+        predicted_scores = self.ranking_model(features).squeeze(0).numpy()
+        predicted_scores = (predicted_scores - predicted_scores.min()) / (
+            predicted_scores.max() - predicted_scores.min() + 1e-8
+        )
+
+        new_scores = scores + (np.pow(np.e, predicted_scores) - 1)
+        doc_ids_sorted = sorted(
+            list(zip(new_scores, matched_doc_ids)), key=lambda x: x[0], reverse=True
+        )
+
+        doc_infos = [
+            self.get_doc_info(doc_id[0], snippet_length) for doc_id in doc_ids_sorted
+        ]
+
+        return len(doc_ids_sorted), list(zip(new_scores, doc_infos))
 
     def traditional_search(
         self,
@@ -1382,15 +1597,6 @@ class InvertedIndex:
             self.calculate_idf(self.metadata["num_docs"], df) for df in doc_freqs
         ]
 
-        avg_doc_length = self.metadata["average_doc_length"]
-        calculate_term_weight_body = partial(
-            self.calculate_term_weight, avg_length=avg_doc_length
-        )
-        avg_title_length = self.metadata["average_title_length"]
-        calculate_term_weight_title = partial(
-            self.calculate_term_weight, avg_length=avg_title_length
-        )
-
         bm25_candidates = []
 
         for doc_id, term_freqs_token, term_freqs_token_title, pos_offsets in zip(
@@ -1402,44 +1608,11 @@ class InvertedIndex:
             term_freqs_token = self.flatten(term_freqs_token)
             term_freqs_token_title = self.flatten(term_freqs_token_title)
 
-            doc_length = self.document_lengths[doc_id]
-            title_length = self.title_lengths[doc_id]
-
-            term_weights_body = [
-                calculate_term_weight_body(
-                    tf=tf,
-                    doc_length=doc_length,
-                )
-                for tf in term_freqs_token
-            ]
-
-            term_weights_title = [
-                calculate_term_weight_title(
-                    tf=tf,
-                    doc_length=title_length,
-                )
-                for tf in term_freqs_token_title
-            ]
-
-            weight_title = 2.0
-            term_weights = [
-                body_weight + title_weight * weight_title
-                for body_weight, title_weight in zip(
-                    term_weights_body, term_weights_title
-                )
-            ]
-
-            body_score = self.fielded_bm25_score(
-                idf_tokens=idf_per_token, tf_tokens=term_weights_body
-            )
-
-            title_score = self.fielded_bm25_score(
-                idf_tokens=idf_per_token, tf_tokens=term_weights_title
-            )
-
-            score = self.fielded_bm25_score(
-                idf_tokens=idf_per_token,
-                tf_tokens=term_weights,
+            score, body_score, title_score = self.calculate_bm25_scores(
+                doc_id=doc_id,
+                term_freqs_token=term_freqs_token,
+                term_freqs_token_title=term_freqs_token_title,
+                idf_per_token=idf_per_token,
             )
 
             if len(bm25_candidates) < num_bm25_candidates:
@@ -1537,6 +1710,7 @@ class InvertedIndex:
         snippet_length: int = 100,
     ) -> tuple[int, list[tuple[float, DocumentInfo]]]:
         if self.enable_semantic_search:
+            self.enable_spelling_correction = False
             return self.semantic_search(query, num_return, snippet_length)
         else:
             return self.traditional_search(
