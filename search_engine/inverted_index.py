@@ -17,12 +17,16 @@ import torch
 from ordered_set import OrderedSet
 from sentence_transformers import SentenceTransformer, util
 
-from search_engine.preprocessing import (build_query_tree, shunting_yard,
-                                         tokenize_text)
+from search_engine.preprocessing import build_query_tree, shunting_yard, tokenize_text
 from search_engine.ranking_model.model import RankingModel
-from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode,
-                                 get_length_from_bytes,
-                                 get_trigrams_from_token)
+from search_engine.utils import (
+    INT_SIZE,
+    LONG_SIZE,
+    DocumentInfo,
+    SearchMode,
+    get_length_from_bytes,
+    get_trigrams_from_token,
+)
 
 
 class SemTradContainResult(NamedTuple):
@@ -173,9 +177,6 @@ class InvertedIndex:
                 device="mps" if torch.backends.mps.is_available() else "cpu",
             )
             self.sentence_transformer.max_seq_length = 256
-
-            
-
 
     def has_phrase(self, pos_list_list: list[tuple[int]]) -> bool:
         indices = [0 for _ in range(len(pos_list_list))]
@@ -538,6 +539,8 @@ class InvertedIndex:
                     term_freqs_per_doc[doc_idx][token_idx] == 0
                     and term_freqs_title_per_doc[doc_idx][token_idx] == 0
                 ):
+                    pos_list_token.append(tuple())
+                    pos_list_title_token.append(tuple())
                     continue
                 else:
                     length_pos_list = struct.unpack(
@@ -1223,7 +1226,6 @@ class InvertedIndex:
             bm25_scores_body.append(bm25_score_body)
             bm25_scores_title.append(bm25_score_title)
 
-            breakpoint()
             body_first_occurrence = [
                 pos_list[0] / doc_length if len(pos_list) > 0 else 1.0
                 for pos_list in pos_list_tokens
@@ -1337,7 +1339,7 @@ class InvertedIndex:
         ):
             if (
                 traditional_doc_ids[traditional_index]
-                == semantic_doc_ids_sort[semantic_index]
+                == semantic_doc_ids_sort[semantic_index][0]
             ):
                 result.append(
                     SemTradContainResult(
@@ -1408,9 +1410,9 @@ class InvertedIndex:
         doc_ids = [int(match["corpus_id"]) for match in cosine_similarities[0]]
 
         matched_doc_ids: list[int] = doc_ids
-        matched_term_freqs: list[list[int]] = [[]] * len(doc_ids)
-        matched_term_freqs_title: list[list[int]] = [[]] * len(doc_ids)
-        matched_pos_offsets: list[list[int | None]] = [[]] * len(doc_ids)
+        matched_term_freqs: list[list[int]] = [[] for _ in range(len(doc_ids))]
+        matched_term_freqs_title: list[list[int]] = [[] for _ in range(len(doc_ids))]
+        matched_pos_offsets: list[list[int | None]] = [[] for _ in range(len(doc_ids))]
 
         matched_bm25_scores: list[float] = []
         matched_bm25_scores_body: list[float] = []
@@ -1467,7 +1469,9 @@ class InvertedIndex:
             matched_pos_offsets=matched_pos_offsets,
         ).unsqueeze(0)
 
-        predicted_scores = self.ranking_model(features).squeeze(0).numpy()
+        with torch.no_grad():
+            predicted_scores = self.ranking_model(features).squeeze(0).detach().numpy()
+
         predicted_scores = (predicted_scores - predicted_scores.min()) / (
             predicted_scores.max() - predicted_scores.min() + 1e-8
         )
@@ -1478,10 +1482,10 @@ class InvertedIndex:
         )
 
         doc_infos = [
-            self.get_doc_info(doc_id[0], snippet_length) for doc_id in doc_ids_sorted
+            (doc_id[0], self.get_doc_info(doc_id[1], snippet_length)) for doc_id in doc_ids_sorted
         ]
 
-        return len(doc_ids_sorted), list(zip(new_scores, doc_infos))
+        return len(doc_ids_sorted), list(doc_infos)
 
     def traditional_search(
         self,
@@ -1681,7 +1685,8 @@ class InvertedIndex:
             matched_pos_offsets=bm25_candidates_pos_offsets,
         ).unsqueeze(0)
 
-        predicted_scores = self.ranking_model(features).squeeze(0).tolist()
+        with torch.no_grad():
+            predicted_scores = self.ranking_model(features).squeeze(0).tolist()
 
         for doc_id, predicted_score in zip(bm25_candidates_doc_ids, predicted_scores):
             if len(result_candidates) < num_return:
