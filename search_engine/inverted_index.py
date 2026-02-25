@@ -17,16 +17,12 @@ import torch
 from ordered_set import OrderedSet
 from sentence_transformers import SentenceTransformer, util
 
-from search_engine.preprocessing import build_query_tree, shunting_yard, tokenize_text
+from search_engine.preprocessing import (build_query_tree, shunting_yard,
+                                         tokenize_text)
 from search_engine.ranking_model.model import RankingModel
-from search_engine.utils import (
-    INT_SIZE,
-    LONG_SIZE,
-    DocumentInfo,
-    SearchMode,
-    get_length_from_bytes,
-    get_trigrams_from_token,
-)
+from search_engine.utils import (INT_SIZE, LONG_SIZE, DocumentInfo, SearchMode,
+                                 get_length_from_bytes,
+                                 get_trigrams_from_token)
 
 
 class SemTradContainResult(NamedTuple):
@@ -70,9 +66,18 @@ class InvertedIndex:
         self.enable_semantic_search = enable_semantic_search
 
         checkpoint = torch.load(file_path_ranking_model, weights_only=False)
+        self.device = (
+            "cuda"
+            if torch.cuda.is_available()
+            else "mps"
+            if torch.backends.mps.is_available()
+            else "cpu"
+        )
         self.ranking_model = RankingModel(
             input_dim=checkpoint["input_dim"], hidden_dim=checkpoint["hidden_dim"]
         )
+        self.ranking_model.to(self.device)
+
         self.ranking_model.load_state_dict(checkpoint["model_state_dict"])
         self.ranking_model.eval()
 
@@ -164,17 +169,18 @@ class InvertedIndex:
                 self.embedding_metadata = pickle.load(f)
 
             with open(file_path_embeddings, "rb") as f:
-                self.doc_embeddings = np.reshape(
-                    np.fromfile(f, dtype=np.float32),
-                    shape=(
-                        self.embedding_metadata["num_docs"],
-                        self.embedding_metadata["truncate_dim"],
-                    ),
-                )
+                self.doc_embeddings = torch.from_numpy(
+                    np.reshape(
+                        np.fromfile(f, dtype=np.float32),
+                        shape=(
+                            self.embedding_metadata["num_docs"],
+                            self.embedding_metadata["truncate_dim"],
+                        ),
+                    )
+                ).to(self.device)
 
             self.sentence_transformer = SentenceTransformer(
-                "all-MiniLM-L6-v2",
-                device="mps" if torch.backends.mps.is_available() else "cpu",
+                "all-MiniLM-L6-v2", device=self.device
             )
             self.sentence_transformer.max_seq_length = 256
 
@@ -1262,7 +1268,8 @@ class InvertedIndex:
                 body_length_norm,
                 title_length_norm,
                 in_title,
-            ]
+            ],
+            device=self.device,
         ).T
 
     def flatten(
@@ -1368,18 +1375,17 @@ class InvertedIndex:
         return result
 
     def semantic_search(
-        self, query: str, num_return: int, snippet_length: int
+        self,
+        query: str,
+        num_semantic_candidates: int,
+        num_return: int,
+        snippet_length: int,
     ) -> tuple[int, list[tuple[float, DocumentInfo]]]:
         query_embedding = self.sentence_transformer.encode(
             [query],
-            convert_to_numpy=True,
+            convert_to_tensor=True,
             normalize_embeddings=True,
-        )
-
-        # tokenize query
-        # for each token get the doc list and term frequencies and postion offsets
-        # intersection between doc_ids of semantic search and each token if semantic search doc id not in tradtional then 0 (save indices for term frequencies and position offsets)
-        # score = some linear combination of rank and semantic score
+        ).to(self.device)
 
         tokenized_query = tokenize_text(query)
 
@@ -1404,7 +1410,7 @@ class InvertedIndex:
         cosine_similarities = util.semantic_search(
             query_embedding,  # pyright: ignore
             self.doc_embeddings,  # pyright: ignore
-            top_k=num_return,
+            top_k=num_semantic_candidates,
         )
 
         doc_ids = [int(match["corpus_id"]) for match in cosine_similarities[0]]
@@ -1470,7 +1476,9 @@ class InvertedIndex:
         ).unsqueeze(0)
 
         with torch.no_grad():
-            predicted_scores = self.ranking_model(features).squeeze(0).detach().numpy()
+            predicted_scores = (
+                self.ranking_model(features).squeeze(0).detach().cpu().numpy()
+            )
 
         predicted_scores = (predicted_scores - predicted_scores.min()) / (
             predicted_scores.max() - predicted_scores.min() + 1e-8
@@ -1479,10 +1487,11 @@ class InvertedIndex:
         new_scores = scores + (np.pow(np.e, predicted_scores) - 1)
         doc_ids_sorted = sorted(
             list(zip(new_scores, matched_doc_ids)), key=lambda x: x[0], reverse=True
-        )
+        )[:num_return]
 
         doc_infos = [
-            (doc_id[0], self.get_doc_info(doc_id[1], snippet_length)) for doc_id in doc_ids_sorted
+            (doc_id[0], self.get_doc_info(doc_id[1], snippet_length))
+            for doc_id in doc_ids_sorted
         ]
 
         return len(doc_ids_sorted), list(doc_infos)
@@ -1686,7 +1695,7 @@ class InvertedIndex:
         ).unsqueeze(0)
 
         with torch.no_grad():
-            predicted_scores = self.ranking_model(features).squeeze(0).tolist()
+            predicted_scores = self.ranking_model(features).squeeze(0).cpu().tolist()
 
         for doc_id, predicted_score in zip(bm25_candidates_doc_ids, predicted_scores):
             if len(result_candidates) < num_return:
@@ -1710,18 +1719,20 @@ class InvertedIndex:
         self,
         query: str,
         mode: SearchMode,
-        num_bm25_candidates: int = 100,
+        num_candidates: int = 100,
         num_return: int = 10,
         snippet_length: int = 100,
     ) -> tuple[int, list[tuple[float, DocumentInfo]]]:
         if self.enable_semantic_search:
             self.enable_spelling_correction = False
-            return self.semantic_search(query, num_return, snippet_length)
+            return self.semantic_search(
+                query, num_candidates, num_return, snippet_length
+            )
         else:
             return self.traditional_search(
                 query=query,
                 mode=mode,
-                num_bm25_candidates=num_bm25_candidates,
+                num_bm25_candidates=num_candidates,
                 num_return=num_return,
                 snippet_length=snippet_length,
             )
