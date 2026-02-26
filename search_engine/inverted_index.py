@@ -762,13 +762,26 @@ class InvertedIndex:
                     right_result_term_freq_title,
                 ) = self.evaluate_subtree(node.right)
                 result_pos_offsets = list(left_result_pos_offset)
-                result_pos_offsets.extend(right_result_pos_offset)
-
                 result_term_freq = list(left_result_term_freq)
-                result_term_freq.extend(right_result_term_freq)
-
                 result_term_freq_title = list(left_result_term_freq_title)
-                result_term_freq_title.extend(right_result_term_freq_title)
+                if (
+                    not isinstance(node.left.value, str)
+                    and not node.left.value == SearchMode.NOT
+                ):
+                    result_pos_offsets = [result_pos_offsets]
+                    result_term_freq = [result_term_freq]
+                    result_term_freq_title = [result_term_freq_title]
+                if (
+                    not isinstance(node.right.value, str)
+                    and not node.right.value == SearchMode.NOT
+                ):
+                    right_result_pos_offset = [right_result_pos_offset]
+                    right_result_term_freq = [right_result_term_freq]
+                    right_result_term_freq_title = [right_result_term_freq_title]
+
+                result_pos_offsets.extend(right_result_pos_offset)  # pyright: ignore
+                result_term_freq.extend(right_result_term_freq)  # pyright: ignore
+                result_term_freq_title.extend(right_result_term_freq_title)  # pyright: ignore
 
                 result_doc_freq = list(left_result_doc_freq)
                 result_doc_freq.extend(right_result_doc_freq)
