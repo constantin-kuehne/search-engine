@@ -1438,8 +1438,7 @@ class InvertedIndex:
 
         if self.enable_approximate_nearest_neighbors:
             doc_ids = (
-                np.array([int(match["corpus_id"]) for match in cosine_similarities[0]])
-                + document_indices[0]
+                np.array([document_indices[int(match["corpus_id"])] for match in cosine_similarities[0]])
             ).tolist()
         else:
             doc_ids = [int(match["corpus_id"]) for match in cosine_similarities[0]]
