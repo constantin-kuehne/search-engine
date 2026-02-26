@@ -1615,7 +1615,7 @@ class InvertedIndex:
             for doc_id in doc_ids_sorted
         ]
 
-        return len(doc_ids_sorted), list(doc_infos)
+        return len(embeddings), list(doc_infos)
 
     def traditional_search(
         self,
