@@ -230,7 +230,9 @@ class InvertedIndex:
         term_frequencies: Sequence[Sequence[int]],
         term_frequencies_title: Sequence[Sequence[int]],
     ) -> tuple[list[int], list[list[int]], list[list[int]], list[list[int]]]:
-        doc_ids = [doc_list for doc_list in doc_ids if len(doc_list) > 0]
+        if any(len(doc_ids_token)<= 0 for doc_ids_token in doc_ids):
+            return ([], [[]], [[]], [[]])
+
         pointer = [0 for _ in range(len(doc_ids))]
         result_doc_ids = []
         min_heap = []
