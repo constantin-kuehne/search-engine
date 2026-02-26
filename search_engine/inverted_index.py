@@ -16,6 +16,7 @@ import numpy as np
 import torch
 from ordered_set import OrderedSet
 from sentence_transformers import SentenceTransformer, util
+from sklearn.cluster import MiniBatchKMeans
 
 from search_engine.preprocessing import (build_query_tree, shunting_yard,
                                          tokenize_text)
@@ -49,8 +50,10 @@ class InvertedIndex:
         file_path_ranking_model: str | Path,
         file_path_embeddings: str | Path,
         file_path_embedding_metadata: str | Path,
+        file_path_kmeans_model: str | Path,
         enable_semantic_search: bool = True,
         enable_spelling_correction: bool = True,
+        enable_approximate_nearest_neighbors: bool = True,
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
 
@@ -62,10 +65,11 @@ class InvertedIndex:
         doc_info_file = open(file_path_doc_info, "rb")
 
         self.index = marisa_trie.RecordTrie("<Q").mmap(str(file_path_term_index))
+
         self.enable_spelling_correction = enable_spelling_correction
         self.enable_semantic_search = enable_semantic_search
+        self.enable_approximate_nearest_neighbors = enable_approximate_nearest_neighbors
 
-        checkpoint = torch.load(file_path_ranking_model, weights_only=False)
         self.device = (
             "cuda"
             if torch.cuda.is_available()
@@ -73,6 +77,8 @@ class InvertedIndex:
             if torch.backends.mps.is_available()
             else "cpu"
         )
+
+        checkpoint = torch.load(file_path_ranking_model, weights_only=False)
         self.ranking_model = RankingModel(
             input_dim=checkpoint["input_dim"], hidden_dim=checkpoint["hidden_dim"]
         )
@@ -183,6 +189,10 @@ class InvertedIndex:
                 "all-MiniLM-L6-v2", device=self.device
             )
             self.sentence_transformer.max_seq_length = 256
+
+            if self.enable_approximate_nearest_neighbors:
+                with open(file_path_kmeans_model, "rb") as f:
+                    self.kmeans_model: MiniBatchKMeans = pickle.load(f)
 
     def has_phrase(self, pos_list_list: list[tuple[int]]) -> bool:
         indices = [0 for _ in range(len(pos_list_list))]
@@ -1380,12 +1390,13 @@ class InvertedIndex:
         num_semantic_candidates: int,
         num_return: int,
         snippet_length: int,
+        num_cluster_candidates: int = 5,
     ) -> tuple[int, list[tuple[float, DocumentInfo]]]:
         query_embedding = self.sentence_transformer.encode(
             [query],
             convert_to_tensor=True,
             normalize_embeddings=True,
-        ).to(self.device)
+        )
 
         tokenized_query = tokenize_text(query)
 
@@ -1407,13 +1418,31 @@ class InvertedIndex:
 
             doc_freqs.append(len(doc_list))
 
+        if self.enable_approximate_nearest_neighbors:
+            distances = self.kmeans_model.transform(query_embedding.cpu().numpy())
+            closest_indices = np.argsort(distances[0])[:num_cluster_candidates]
+            documents_mask = np.isin(self.kmeans_model.labels_, closest_indices)
+            document_indices = np.where(documents_mask)[0]
+            embeddings = self.doc_embeddings[document_indices]
+            print(f"{embeddings.shape=}, {self.enable_approximate_nearest_neighbors=}, {document_indices.shape=}")
+        else:
+            embeddings = self.doc_embeddings
+
+
+        query_embedding = query_embedding.to(self.device)
         cosine_similarities = util.semantic_search(
             query_embedding,  # pyright: ignore
-            self.doc_embeddings,  # pyright: ignore
+            embeddings,  # pyright: ignore
             top_k=num_semantic_candidates,
         )
 
-        doc_ids = [int(match["corpus_id"]) for match in cosine_similarities[0]]
+        if self.enable_approximate_nearest_neighbors:
+            doc_ids = (
+                np.array([int(match["corpus_id"]) for match in cosine_similarities[0]])
+                + document_indices[0]
+            ).tolist()
+        else:
+            doc_ids = [int(match["corpus_id"]) for match in cosine_similarities[0]]
 
         matched_doc_ids: list[int] = doc_ids
         matched_term_freqs: list[list[int]] = [[] for _ in range(len(doc_ids))]

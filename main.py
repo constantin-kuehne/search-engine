@@ -36,6 +36,13 @@ if __name__ == "__main__":
         dest="enable_spelling_correction",
         default=True,
     )
+    parser.add_argument(
+        "--disable_approximate_nearest_neighbors",
+        action="store_false",
+        help="Whether disable enable approximate nearest neighbors for semantic search",
+        dest="enable_approximate_nearest_neighbors",
+        default=True,
+    )
 
     args = parser.parse_args()
 
@@ -62,9 +69,10 @@ if __name__ == "__main__":
         file_path_ranking_model="./search_engine/ranking_model/checkpoints/1pdz89si/best_checkpoint.pth",
         file_path_embeddings="./final_embed/embeddings.npy",
         file_path_embedding_metadata="./final_embed/embedding_metadata",
+        file_path_kmeans_model="./final_embed/kmeans.pkl",
         enable_semantic_search=enable_semantic_search,
         enable_spelling_correction=args.enable_spelling_correction,
-
+        enable_approximate_nearest_neighbors=args.enable_approximate_nearest_neighbors,
     )
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")
