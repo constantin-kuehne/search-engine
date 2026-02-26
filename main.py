@@ -43,6 +43,13 @@ if __name__ == "__main__":
         dest="enable_approximate_nearest_neighbors",
         default=True,
     )
+    parser.add_argument(
+        "--disable_ranking_model",
+        action="store_false",
+        help="Whether disable enable the ranking model for re-ranking search results",
+        dest="enable_ranking_model",
+        default=True,
+    )
 
     args = parser.parse_args()
 
@@ -73,6 +80,7 @@ if __name__ == "__main__":
         enable_semantic_search=enable_semantic_search,
         enable_spelling_correction=args.enable_spelling_correction,
         enable_approximate_nearest_neighbors=args.enable_approximate_nearest_neighbors,
+        enable_ranking_model=args.enable_ranking_model,
     )
     end = time.time()
     print(f"Index loaded. Took {end - start:.4f}s\n")

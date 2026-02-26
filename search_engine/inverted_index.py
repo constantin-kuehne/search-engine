@@ -54,6 +54,7 @@ class InvertedIndex:
         enable_semantic_search: bool = True,
         enable_spelling_correction: bool = True,
         enable_approximate_nearest_neighbors: bool = True,
+        enable_ranking_model: bool = True,
     ) -> None:
         doc_id_file = open(file_path_doc_id, "rb")
 
@@ -69,6 +70,7 @@ class InvertedIndex:
         self.enable_spelling_correction = enable_spelling_correction
         self.enable_semantic_search = enable_semantic_search
         self.enable_approximate_nearest_neighbors = enable_approximate_nearest_neighbors
+        self.enable_ranking_model = enable_ranking_model
 
         self.device = (
             "cuda"
@@ -1689,56 +1691,59 @@ class InvertedIndex:
         results: list[tuple[float, DocumentInfo]] = []
         bm25_candidates = sorted(bm25_candidates, key=lambda x: x[0], reverse=True)
 
-        bm25_candidates_doc_ids = []
-        bm25_candidates_scores = []
-        bm25_candidates_scores_body = []
-        bm25_candidates_scores_title = []
-        bm25_candidates_term_freqs = []
-        bm25_candidates_term_freqs_title = []
-        bm25_candidates_pos_offsets = []
+        if self.enable_ranking_model:
+            bm25_candidates_doc_ids = []
+            bm25_candidates_scores = []
+            bm25_candidates_scores_body = []
+            bm25_candidates_scores_title = []
+            bm25_candidates_term_freqs = []
+            bm25_candidates_term_freqs_title = []
+            bm25_candidates_pos_offsets = []
 
-        for (
-            score,
-            doc_id,
-            body_score,
-            title_score,
-            term_freqs_token,
-            term_freqs_token_title,
-            pos_offsets,
-        ) in bm25_candidates:
-            bm25_candidates_doc_ids.append(doc_id)
-            bm25_candidates_scores.append(score)
-            bm25_candidates_scores_body.append(body_score)
-            bm25_candidates_scores_title.append(title_score)
-            bm25_candidates_term_freqs.append(term_freqs_token)
-            bm25_candidates_term_freqs_title.append(term_freqs_token_title)
-            bm25_candidates_pos_offsets.append(pos_offsets)
+            for (
+                score,
+                doc_id,
+                body_score,
+                title_score,
+                term_freqs_token,
+                term_freqs_token_title,
+                pos_offsets,
+            ) in bm25_candidates:
+                bm25_candidates_doc_ids.append(doc_id)
+                bm25_candidates_scores.append(score)
+                bm25_candidates_scores_body.append(body_score)
+                bm25_candidates_scores_title.append(title_score)
+                bm25_candidates_term_freqs.append(term_freqs_token)
+                bm25_candidates_term_freqs_title.append(term_freqs_token_title)
+                bm25_candidates_pos_offsets.append(pos_offsets)
 
-        result_candidates = []
-        features = self.extract_features(
-            matched_doc_ids=bm25_candidates_doc_ids,
-            matched_bm25_scores=bm25_candidates_scores,
-            matched_bm25_scores_body=bm25_candidates_scores_body,
-            matched_bm25_scores_title=bm25_candidates_scores_title,
-            matched_term_freqs=bm25_candidates_term_freqs,
-            matched_term_freqs_title=bm25_candidates_term_freqs_title,
-            matched_pos_offsets=bm25_candidates_pos_offsets,
-        ).unsqueeze(0)
+            result_candidates = []
+            features = self.extract_features(
+                matched_doc_ids=bm25_candidates_doc_ids,
+                matched_bm25_scores=bm25_candidates_scores,
+                matched_bm25_scores_body=bm25_candidates_scores_body,
+                matched_bm25_scores_title=bm25_candidates_scores_title,
+                matched_term_freqs=bm25_candidates_term_freqs,
+                matched_term_freqs_title=bm25_candidates_term_freqs_title,
+                matched_pos_offsets=bm25_candidates_pos_offsets,
+            ).unsqueeze(0)
 
-        with torch.no_grad():
-            predicted_scores = self.ranking_model(features).squeeze(0).cpu().tolist()
+            with torch.no_grad():
+                predicted_scores = self.ranking_model(features).squeeze(0).cpu().tolist()
 
-        for doc_id, predicted_score in zip(bm25_candidates_doc_ids, predicted_scores):
-            if len(result_candidates) < num_return:
-                heapq.heappush(
-                    result_candidates,
-                    (predicted_score, doc_id),
-                )
-            elif predicted_score > result_candidates[0][0]:
-                heapq.heapreplace(
-                    result_candidates,
-                    (predicted_score, doc_id),
-                )
+            for doc_id, predicted_score in zip(bm25_candidates_doc_ids, predicted_scores):
+                if len(result_candidates) < num_return:
+                    heapq.heappush(
+                        result_candidates,
+                        (predicted_score, doc_id),
+                    )
+                elif predicted_score > result_candidates[0][0]:
+                    heapq.heapreplace(
+                        result_candidates,
+                        (predicted_score, doc_id),
+                    )
+        else:
+            result_candidates= [(score, doc_id) for score, doc_id, _, _, _, _, _ in bm25_candidates[:num_return]]
 
         result_candidates = sorted(result_candidates, key=lambda x: x[0], reverse=True)
         for score, doc_id in result_candidates:
