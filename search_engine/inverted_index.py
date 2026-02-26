@@ -1424,10 +1424,8 @@ class InvertedIndex:
             documents_mask = np.isin(self.kmeans_model.labels_, closest_indices)
             document_indices = np.where(documents_mask)[0]
             embeddings = self.doc_embeddings[document_indices]
-            print(f"{embeddings.shape=}, {self.enable_approximate_nearest_neighbors=}, {document_indices.shape=}")
         else:
             embeddings = self.doc_embeddings
-
 
         query_embedding = query_embedding.to(self.device)
         cosine_similarities = util.semantic_search(
@@ -1438,7 +1436,12 @@ class InvertedIndex:
 
         if self.enable_approximate_nearest_neighbors:
             doc_ids = (
-                np.array([document_indices[int(match["corpus_id"])] for match in cosine_similarities[0]])
+                np.array(
+                    [
+                        document_indices[int(match["corpus_id"])]
+                        for match in cosine_similarities[0]
+                    ]
+                )
             ).tolist()
         else:
             doc_ids = [int(match["corpus_id"]) for match in cosine_similarities[0]]
