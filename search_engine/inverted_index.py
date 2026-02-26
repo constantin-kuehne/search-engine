@@ -230,7 +230,24 @@ class InvertedIndex:
         term_frequencies: Sequence[Sequence[int]],
         term_frequencies_title: Sequence[Sequence[int]],
     ) -> tuple[list[int], list[list[int]], list[list[int]], list[list[int]]]:
-        if any(len(doc_ids_token)<= 0 for doc_ids_token in doc_ids):
+        new_doc_ids = []
+        new_pos_offset_list = []
+        new_term_frequencies = []
+        new_term_frequencies_title = []
+
+        for i, doc_list in enumerate(doc_ids):
+            if (len(doc_list) <= 0) or (doc_list[0] != -1):
+                new_doc_ids.append(doc_list)
+                new_pos_offset_list.append(pos_offset_list[i])
+                new_term_frequencies.append(term_frequencies[i])
+                new_term_frequencies_title.append(term_frequencies_title[i])
+
+        doc_ids = new_doc_ids
+        pos_offset_list = new_pos_offset_list
+        term_frequencies = new_term_frequencies
+        term_frequencies_title = new_term_frequencies_title
+
+        if any(len(doc_ids_token) <= 0 for doc_ids_token in doc_ids):
             return ([], [[]], [[]], [[]])
 
         pointer = [0 for _ in range(len(doc_ids))]
@@ -323,7 +340,24 @@ class InvertedIndex:
         term_frequencies: Sequence[Sequence[int]],
         term_frequencies_title: Sequence[Sequence[int]],
     ) -> tuple[list[int], list[list[int]], list[list[int]], Sequence[Sequence[int]]]:
-        if any(len(doc_ids_token)<= 0 for doc_ids_token in doc_ids_per_token):
+        new_doc_ids = []
+        new_pos_offset_list = []
+        new_term_frequencies = []
+        new_term_frequencies_title = []
+
+        for i, doc_list in enumerate(doc_ids_per_token):
+            if (len(doc_list) <= 0) or (doc_list[0] != -1):
+                new_doc_ids.append(doc_list)
+                new_pos_offset_list.append(doc_pos_per_token[i])
+                new_term_frequencies.append(term_frequencies[i])
+                new_term_frequencies_title.append(term_frequencies_title[i])
+
+        doc_ids_per_token = new_doc_ids
+        doc_pos_per_token = new_pos_offset_list
+        term_frequencies = new_term_frequencies
+        term_frequencies_title = new_term_frequencies_title
+
+        if any(len(doc_ids_token) <= 0 for doc_ids_token in doc_ids_per_token):
             return ([], [[]], [[]], [[]])
 
         pointer = [0 for _ in range(len(doc_ids_per_token))]
@@ -417,6 +451,23 @@ class InvertedIndex:
         term_frequencies: Sequence[Sequence[int]],
         term_frequencies_title: Sequence[Sequence[int]],
     ) -> tuple[list[int], list[list[int]], list[list[int]], list[list[int]]]:
+        new_doc_ids = []
+        new_pos_offset_list = []
+        new_term_frequencies = []
+        new_term_frequencies_title = []
+
+        for i, doc_list in enumerate(doc_ids):
+            if (len(doc_list) <= 0) or (doc_list[0] != -1):
+                new_doc_ids.append(doc_list)
+                new_pos_offset_list.append(pos_offset_list[i])
+                new_term_frequencies.append(term_frequencies[i])
+                new_term_frequencies_title.append(term_frequencies_title[i])
+
+        doc_ids = new_doc_ids
+        pos_offset_list = new_pos_offset_list
+        term_frequencies = new_term_frequencies
+        term_frequencies_title = new_term_frequencies_title
+
         num_terms = len(doc_ids)
         pointers = [0] * num_terms
         result_doc_ids = []
@@ -489,6 +540,10 @@ class InvertedIndex:
             Sequence[Sequence[int]],
             Sequence[Sequence[int]],
         ] = [], [], [], []
+
+        if (len(doc_list) == 1) and (doc_list[0][0] == -1):
+            return matched
+
         if len(doc_list) == 1:
             matched = (
                 doc_list[0],
@@ -516,6 +571,8 @@ class InvertedIndex:
             [],
             [],
         )
+        if (len(doc_list) == 1) and (doc_list[0][0] == -1):
+            return matched
 
         if len(doc_list) == 1:
             matched = (
@@ -1059,8 +1116,13 @@ class InvertedIndex:
             if (enable_threshold) and (
                 idf_score < idf_threshold or length_doc_list == 0
             ):
-                empty_tuple: tuple[int] = tuple([])
-                return empty_tuple, empty_tuple, empty_tuple, empty_tuple
+                below_idf_tuple: tuple[int] = tuple([-1])
+                return (
+                    below_idf_tuple,
+                    below_idf_tuple,
+                    below_idf_tuple,
+                    below_idf_tuple,
+                )
 
             doc_list = self.get_doc_list(length_doc_list, doc_id_file_offset)
             term_frequencies_title, term_frequencies = self.get_term_frequencies(
