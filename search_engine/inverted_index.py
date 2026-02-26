@@ -1,3 +1,4 @@
+import concurrent.futures
 import csv
 import heapq
 import math
@@ -997,7 +998,7 @@ class InvertedIndex:
         search_space_size_jaccard: int,
         search_space_size_edit_distance: int,
         num_replacements: int,
-    ) -> list[str]:
+    ) -> str:
         trigrams = get_trigrams_from_token(original_token)
         num_trigrams: int = len(trigrams)
         if num_trigrams == 0:
@@ -1021,35 +1022,26 @@ class InvertedIndex:
             )
             jaccard_similarities.append((jaccard_similarity, i))
 
-        jaccard_similarities.sort(reverse=True)
+        jaccard_similarities = heapq.nlargest(search_space_size_jaccard, jaccard_similarities)
         edit_distances: list[tuple[int, int]] = []
-        for _, token_id in jaccard_similarities[:search_space_size_jaccard]:
+        for _, token_id in jaccard_similarities:
             edit_distance = editdistance.eval(all_tokens[token_id][0], original_token)
             edit_distances.append((edit_distance, token_id))
 
-        edit_distances.sort(reverse=False)
+        edit_distances = heapq.nsmallest(search_space_size_edit_distance, edit_distances)
         document_frequencies: list[tuple[int, int]] = []
-        for _, token_id in edit_distances[:search_space_size_edit_distance]:
+        for _, token_id in edit_distances:
             doc_frequency, _ = self.get_doc_frequency_for_token(all_tokens[token_id][0])
             document_frequencies.append((doc_frequency, token_id))
 
-        document_frequencies.sort(reverse=True)
-        result: list[str] = []
-        for _, token_id in document_frequencies[:num_replacements]:
-            result.append(all_tokens[token_id][0])
+        result = all_tokens[max(document_frequencies)[1]][0]
 
-        print(
-            f'Correcting spelling of "{original_token}" with "{result[0]}". Other possibilities: ',
-            end="",
-        )
-        first: bool = True
-        for correction in result[1:]:
-            if first:
-                first = False
-            else:
-                print(", ", end="")
-            print(f'"{correction}"', end="")
-        print()
+        if result == original_token:
+            print(f'Ran spelling correction, best match was itself: {original_token}')
+        else:
+            print(
+                f'Correcting spelling of "{original_token}" with "{result}"'
+            )
 
         return result
 
@@ -1060,7 +1052,7 @@ class InvertedIndex:
         res: Optional[int] = result[0][0] if result else None
 
         if (res is None) and self.enable_spelling_correction:
-            token = self.correct_spelling(token, 75, 50, 5)[0]
+            token = self.correct_spelling(token, 75, 50, 5)
             result = self.index.get(token)
             res = result[0][0] if result else None
 
@@ -1642,32 +1634,22 @@ class InvertedIndex:
         term_freqs_title: list[tuple[int, ...]] = []
         doc_freqs: list[int] = []
         match mode:
-            case SearchMode.PHRASE:
-                for token in tokens:
-                    (
-                        doc_list_per_token,
-                        pos_offset_list_per_token,
-                        term_freq_per_token,
-                        term_freq_title_per_token,
-                    ) = self.get_docs_phrase(token)
+            case SearchMode.AND | SearchMode.OR | SearchMode.NOT | SearchMode.PHRASE:
+                def process_result(doc_list_per_token, pos_offset_list_per_token, term_freq_per_token, term_freq_title_per_token):
                     doc_list.append(doc_list_per_token)
                     pos_offset_list.append(pos_offset_list_per_token)
                     term_freqs.append(term_freq_per_token)
                     term_freqs_title.append(term_freq_title_per_token)
                     doc_freqs.append(len(doc_list_per_token))
-            case SearchMode.AND | SearchMode.OR | SearchMode.NOT:
-                for token in tokens:
-                    (
-                        doc_list_per_token,
-                        pos_offset_list_per_token,
-                        term_freq_per_token,
-                        term_freq_title_per_token,
-                    ) = self.get_docs(token)
-                    doc_list.append(doc_list_per_token)
-                    pos_offset_list.append(pos_offset_list_per_token)
-                    term_freqs.append(term_freq_per_token)
-                    term_freqs_title.append(term_freq_title_per_token)
-                    doc_freqs.append(len(doc_list_per_token))
+
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    if mode is SearchMode.PHRASE:
+                        for doc_list_per_token, pos_offset_list_per_token, term_freq_per_token, term_freq_title_per_token in executor.map(self.get_docs_phrase, tokens):
+                            process_result(doc_list_per_token, pos_offset_list_per_token, term_freq_per_token, term_freq_title_per_token)
+                    else:
+                        for doc_list_per_token, pos_offset_list_per_token, term_freq_per_token, term_freq_title_per_token in executor.map(self.get_docs, tokens):
+                            process_result(doc_list_per_token, pos_offset_list_per_token, term_freq_per_token, term_freq_title_per_token)
+
             case SearchMode.QUERY_EVALUATOR:
                 pass
             case _:
@@ -1790,7 +1772,7 @@ class InvertedIndex:
                     ),
                 )
 
-        results: list[tuple[float, DocumentInfo]] = []
+        threads: list[tuple[float, DocumentInfo]] = []
         bm25_candidates = sorted(bm25_candidates, key=lambda x: x[0], reverse=True)
 
         if self.enable_ranking_model:
@@ -1856,9 +1838,9 @@ class InvertedIndex:
 
         result_candidates = sorted(result_candidates, key=lambda x: x[0], reverse=True)
         for score, doc_id in result_candidates:
-            results.append((score, self.get_doc_info(doc_id, snippet_length)))
+            threads.append((score, self.get_doc_info(doc_id, snippet_length)))
 
-        return len(matched_doc_ids), results
+        return len(matched_doc_ids), threads
 
     def search(
         self,
