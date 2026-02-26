@@ -1566,12 +1566,11 @@ class InvertedIndex:
                         term_freq_per_token,
                         term_freq_title_per_token,
                     ) = self.get_docs(token)
-                    if len(doc_list_per_token) > 0:
-                        doc_list.append(doc_list_per_token)
-                        pos_offset_list.append(pos_offset_list_per_token)
-                        term_freqs.append(term_freq_per_token)
-                        term_freqs_title.append(term_freq_title_per_token)
-                        doc_freqs.append(len(doc_list_per_token))
+                    doc_list.append(doc_list_per_token)
+                    pos_offset_list.append(pos_offset_list_per_token)
+                    term_freqs.append(term_freq_per_token)
+                    term_freqs_title.append(term_freq_title_per_token)
+                    doc_freqs.append(len(doc_list_per_token))
             case SearchMode.QUERY_EVALUATOR:
                 pass
             case _:
@@ -1636,6 +1635,12 @@ class InvertedIndex:
 
         if len(matched_term_freqs) == 1 and len(matched_doc_ids) != 1:
             matched_term_freqs = list(zip(*matched_term_freqs))
+
+        if len(matched_term_freqs_title ) == 1 and len(matched_doc_ids) != 1:
+            matched_term_freqs_title = list(zip(*matched_term_freqs_title))
+
+        if len(matched_pos_offsets) == 1 and len(matched_doc_ids) != 1:
+            matched_pos_offsets = list(zip(*matched_pos_offsets))
 
         assert len(matched_doc_ids) == len(matched_term_freqs)
 
