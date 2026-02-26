@@ -235,12 +235,21 @@ class InvertedIndex:
         new_term_frequencies = []
         new_term_frequencies_title = []
 
+
+        num_filtered = 0
+
         for i, doc_list in enumerate(doc_ids):
             if (len(doc_list) <= 0) or (doc_list[0] != -1):
                 new_doc_ids.append(doc_list)
                 new_pos_offset_list.append(pos_offset_list[i])
                 new_term_frequencies.append(term_frequencies[i])
                 new_term_frequencies_title.append(term_frequencies_title[i])
+            if (len(doc_list) > 0) and (doc_list[0] == -1):
+                num_filtered += 1
+
+        if num_filtered == len(doc_ids):
+            return ([-1], [[-1]], [[-1]], [[-1]])
+
 
         doc_ids = new_doc_ids
         pos_offset_list = new_pos_offset_list
