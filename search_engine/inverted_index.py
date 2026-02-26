@@ -533,13 +533,21 @@ class InvertedIndex:
             tuple([])
         )
         if len(doc_list) == 0:
-            term_freqs = [[0 for _ in range(len(self.docs))]]
-            pos_offsets = [[-1 for _ in range(len(self.docs))]]
-            matched = (list(self.docs)), pos_offsets, term_freqs, term_freqs.copy()
+            term_freqs = []
+            pos_offsets = []
+            doc_ids = []
+            for i in range(len(self.document_lengths)):
+                term_freqs.append(0)
+                pos_offsets.append(-1)
+                doc_ids.append(i)
+            matched = (doc_ids, pos_offsets, term_freqs, term_freqs.copy())
         else:
-            doc_ids_matched = list(OrderedSet(self.docs).difference(*doc_list))
+            doc_ids = []
+            for i in range(len(self.document_lengths)):
+                doc_ids.append(i)
+            doc_ids_matched = list(set(doc_ids).difference(*doc_list))
             term_freqs = [[0 for _ in range(len(doc_ids_matched))]]
-            pos_offsets = [[-1 for _ in range(len(self.docs))]]
+            pos_offsets = [[-1 for _ in range(len(doc_ids_matched))]]
             matched = (doc_ids_matched, pos_offsets, term_freqs, term_freqs.copy())
 
         return matched
@@ -1636,7 +1644,7 @@ class InvertedIndex:
         if len(matched_term_freqs) == 1 and len(matched_doc_ids) != 1:
             matched_term_freqs = list(zip(*matched_term_freqs))
 
-        if len(matched_term_freqs_title ) == 1 and len(matched_doc_ids) != 1:
+        if len(matched_term_freqs_title) == 1 and len(matched_doc_ids) != 1:
             matched_term_freqs_title = list(zip(*matched_term_freqs_title))
 
         if len(matched_pos_offsets) == 1 and len(matched_doc_ids) != 1:
@@ -1734,9 +1742,13 @@ class InvertedIndex:
             ).unsqueeze(0)
 
             with torch.no_grad():
-                predicted_scores = self.ranking_model(features).squeeze(0).cpu().tolist()
+                predicted_scores = (
+                    self.ranking_model(features).squeeze(0).cpu().tolist()
+                )
 
-            for doc_id, predicted_score in zip(bm25_candidates_doc_ids, predicted_scores):
+            for doc_id, predicted_score in zip(
+                bm25_candidates_doc_ids, predicted_scores
+            ):
                 if len(result_candidates) < num_return:
                     heapq.heappush(
                         result_candidates,
@@ -1748,7 +1760,10 @@ class InvertedIndex:
                         (predicted_score, doc_id),
                     )
         else:
-            result_candidates= [(score, doc_id) for score, doc_id, _, _, _, _, _ in bm25_candidates[:num_return]]
+            result_candidates = [
+                (score, doc_id)
+                for score, doc_id, _, _, _, _, _ in bm25_candidates[:num_return]
+            ]
 
         result_candidates = sorted(result_candidates, key=lambda x: x[0], reverse=True)
         for score, doc_id in result_candidates:
